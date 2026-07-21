@@ -1,6 +1,7 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
 #include "precomp.h"
+#include <ktmw32.h>
 #include "InstallResume.h"
 
 #include <nlohmann/json.hpp>
@@ -181,6 +182,15 @@ void WriteRegistryString(HKEY key, LPCWSTR valueName, std::wstring_view value, s
     const std::wstring nullTerminated{value};
     THROW_IF_WIN32_ERROR(RegSetValueExW(
         key, valueName, 0, REG_SZ, reinterpret_cast<const BYTE*>(nullTerminated.c_str()), static_cast<DWORD>(byteCount)));
+}
+
+wil::unique_hkey CreateTransactedRegistryKey(HKEY parent, std::wstring_view path, HANDLE transaction)
+{
+    const std::wstring nullTerminatedPath{path};
+    wil::unique_hkey key;
+    THROW_IF_WIN32_ERROR(RegCreateKeyTransactedW(
+        parent, nullTerminatedPath.c_str(), 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key, nullptr, transaction, nullptr));
+    return key;
 }
 
 void DeleteRegistryValue(HKEY key, LPCWSTR valueName)
@@ -849,6 +859,19 @@ std::optional<wsl::windows::common::installresume::RawRegistryValue> wsl::window
 std::optional<wsl::windows::common::installresume::RawRegistryValue> wsl::windows::common::installresume::RegistryStore::ReadTrigger() const
 {
     return ReadRawRegistryValue(m_runKey.get(), c_triggerValueName, (c_maxRunCommandCharacters + 1) * sizeof(WCHAR));
+}
+
+void wsl::windows::common::installresume::RegistryStore::Arm(std::wstring_view state, std::wstring_view trigger)
+{
+    wil::unique_hfile transaction{CreateTransaction(nullptr, nullptr, TRANSACTION_DO_NOT_PROMOTE, 0, 0, 0, nullptr)};
+    THROW_LAST_ERROR_IF(!transaction);
+
+    const auto resumeKey = CreateTransactedRegistryKey(
+        m_currentUserKey.get(), std::format(L"{}\\{}", LXSS_REGISTRY_PATH, c_resumeKeyName), transaction.get());
+    const auto runKey = CreateTransactedRegistryKey(m_currentUserKey.get(), c_runRegistryPath, transaction.get());
+    WriteRegistryString(resumeKey.get(), c_stateValueName, state, c_maxStateCharacters);
+    WriteRegistryString(runKey.get(), c_triggerValueName, trigger, c_maxRunCommandCharacters);
+    THROW_IF_WIN32_BOOL_FALSE(CommitTransaction(transaction.get()));
 }
 
 void wsl::windows::common::installresume::RegistryStore::WriteState(std::wstring_view value)

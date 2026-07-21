@@ -644,10 +644,8 @@ void ArmInstallResume(installresume::Store& store, const installresume::Intent& 
         THROW_HR_WITH_USER_ERROR(commandResult, Localization::MessageInstallResumeRunCommandTooLong());
     }
     THROW_IF_FAILED(commandResult);
-
     const auto serialized = installresume::SerializeState(state);
-    store.WriteState(serialized);
-    store.WriteTrigger(command);
+    store.Arm(serialized, command);
     wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstallResumeScheduled());
 }
 

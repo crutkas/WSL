@@ -64,43 +64,54 @@ class MemoryStore final : public Store
 public:
     std::optional<RawRegistryValue> ReadState() const override
     {
-        return StateValue;
+        return Values.first;
     }
 
     std::optional<RawRegistryValue> ReadTrigger() const override
     {
-        return TriggerValue;
+        return Values.second;
+    }
+
+    void Arm(std::wstring_view state, std::wstring_view trigger) override
+    {
+        std::pair values{std::optional{MakeStringValue(state)}, std::optional{MakeStringValue(trigger)}};
+        if (FailArm)
+        {
+            THROW_HR(E_FAIL);
+        }
+
+        Values.swap(values);
     }
 
     void WriteState(std::wstring_view value) override
     {
-        StateValue = MakeStringValue(value);
+        Values.first = MakeStringValue(value);
     }
 
     void WriteTrigger(std::wstring_view value) override
     {
-        TriggerValue = MakeStringValue(value);
+        Values.second = MakeStringValue(value);
     }
 
     void DeleteState() override
     {
-        StateValue.reset();
+        Values.first.reset();
     }
 
     void DeleteTrigger() override
     {
-        TriggerValue.reset();
+        Values.second.reset();
     }
 
     void QuarantineState(std::wstring_view) override
     {
-        QuarantinedValue = StateValue;
-        StateValue.reset();
+        QuarantinedValue = Values.first;
+        Values.first.reset();
     }
 
-    std::optional<RawRegistryValue> StateValue;
-    std::optional<RawRegistryValue> TriggerValue;
+    std::pair<std::optional<RawRegistryValue>, std::optional<RawRegistryValue>> Values;
     std::optional<RawRegistryValue> QuarantinedValue;
+    bool FailArm{};
 };
 
 } // namespace
@@ -273,26 +284,20 @@ class InstallResumeTests
         const auto bootId = ParseGuid(L"{33333333-3333-3333-3333-333333333333}");
         const auto state1 = MakeState(generation1, bootId);
         const auto state2 = MakeState(generation2, bootId);
-
         MemoryStore store;
-        store.WriteState(SerializeState(state1));
-        store.WriteTrigger(BuildRunCommand(L"C:\\WSL\\wsl.exe", generation1));
+        store.Arm(SerializeState(state1), BuildRunCommand(L"C:\\WSL\\wsl.exe", generation1));
         VERIFY_IS_TRUE(
             EvaluateAutomaticRecovery(DecodeState(store.ReadState()), DecodeTrigger(store.ReadTrigger()), generation1).Action ==
             RecoveryAction::Run);
 
+        // Explicit supersede removes the trigger before the old state.
         store.DeleteTrigger();
         VERIFY_IS_TRUE(
             EvaluateAutomaticRecovery(DecodeState(store.ReadState()), DecodeTrigger(store.ReadTrigger()), generation1).Action ==
             RecoveryAction::Quiet);
 
         store.DeleteState();
-        store.WriteState(SerializeState(state2));
-        VERIFY_IS_TRUE(
-            EvaluateAutomaticRecovery(DecodeState(store.ReadState()), DecodeTrigger(store.ReadTrigger()), generation1).Action ==
-            RecoveryAction::Quiet);
-
-        store.WriteTrigger(BuildRunCommand(L"C:\\WSL\\wsl.exe", generation2));
+        store.Arm(SerializeState(state2), BuildRunCommand(L"C:\\WSL\\wsl.exe", generation2));
         VERIFY_IS_TRUE(
             EvaluateAutomaticRecovery(DecodeState(store.ReadState()), DecodeTrigger(store.ReadTrigger()), generation1).Action ==
             RecoveryAction::Quiet);
@@ -304,6 +309,43 @@ class InstallResumeTests
         VERIFY_IS_TRUE(
             EvaluateAutomaticRecovery(DecodeState(store.ReadState()), DecodeTrigger(store.ReadTrigger()), generation2).Action ==
             RecoveryAction::ClearOrphanTrigger);
+    }
+
+    TEST_METHOD(ArmStateAndTriggerAtomically)
+    {
+        const auto staleGeneration = ParseGuid(L"{11111111-1111-1111-1111-111111111111}");
+        const auto newerGeneration = ParseGuid(L"{22222222-2222-2222-2222-222222222222}");
+        const auto bootId = ParseGuid(L"{33333333-3333-3333-3333-333333333333}");
+        const auto staleState = MakeState(staleGeneration, bootId);
+        const auto newerState = MakeState(newerGeneration, bootId);
+
+        MemoryStore store;
+        store.FailArm = true;
+        VERIFY_ARE_EQUAL(E_FAIL, wil::ResultFromException([&]() {
+                             store.Arm(SerializeState(staleState), BuildRunCommand(L"C:\\WSL\\wsl.exe", staleGeneration));
+                         }));
+        VERIFY_IS_TRUE(DecodeState(store.ReadState()).Kind == StateValueKind::Missing);
+        VERIFY_IS_TRUE(DecodeTrigger(store.ReadTrigger()).Kind == TriggerValueKind::Missing);
+
+        store.FailArm = false;
+        store.Arm(SerializeState(newerState), BuildRunCommand(L"C:\\WSL\\wsl.exe", newerGeneration));
+        auto persistedState = DecodeState(store.ReadState());
+        auto persistedTrigger = DecodeTrigger(store.ReadTrigger());
+        VERIFY_IS_TRUE(persistedState.Kind == StateValueKind::Valid);
+        VERIFY_IS_TRUE(persistedTrigger.Kind == TriggerValueKind::Valid);
+        VERIFY_IS_TRUE(AreEqual(newerGeneration, persistedState.Value->Generation));
+        VERIFY_IS_TRUE(AreEqual(newerGeneration, *persistedTrigger.Generation));
+
+        store.FailArm = true;
+        VERIFY_ARE_EQUAL(E_FAIL, wil::ResultFromException([&]() {
+                             store.Arm(SerializeState(staleState), BuildRunCommand(L"C:\\WSL\\wsl.exe", staleGeneration));
+                         }));
+        persistedState = DecodeState(store.ReadState());
+        persistedTrigger = DecodeTrigger(store.ReadTrigger());
+        VERIFY_IS_TRUE(persistedState.Kind == StateValueKind::Valid);
+        VERIFY_IS_TRUE(persistedTrigger.Kind == TriggerValueKind::Valid);
+        VERIFY_IS_TRUE(AreEqual(newerGeneration, persistedState.Value->Generation));
+        VERIFY_IS_TRUE(AreEqual(newerGeneration, *persistedTrigger.Generation));
     }
 
     TEST_METHOD(QuarantineCorruptCurrentState)
