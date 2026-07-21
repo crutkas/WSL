@@ -359,39 +359,7 @@ std::string FormatCommandLine(gsl::span<gsl::byte> CommandLineData, USHORT Comma
     for (USHORT Index = 0; Index < CommandLineCount; Index += 1)
     {
         std::string_view Buffer = wsl::shared::string::FromSpan(CommandLineData);
-        if (!Buffer.empty() && Buffer.find_first_of(" \t\r\n\"") == Buffer.npos)
-        {
-            CommandLine.append(Buffer);
-        }
-        else
-        {
-            CommandLine += '"';
-            size_t BackslashCount = 0;
-            for (const char Ch : Buffer)
-            {
-                switch (Ch)
-                {
-                case '"':
-                    CommandLine.append(((BackslashCount * 2) + 1), '\\');
-                    BackslashCount = 0;
-                    CommandLine += '"';
-                    break;
-
-                case '\\':
-                    BackslashCount += 1;
-                    break;
-
-                default:
-                    CommandLine.append(BackslashCount, '\\');
-                    BackslashCount = 0;
-                    CommandLine += Ch;
-                    break;
-                }
-            }
-
-            CommandLine.append(BackslashCount * 2, '\\');
-            CommandLine += '"';
-        }
+        CommandLine += wsl::shared::string::QuoteWindowsCommandLineArgument(Buffer);
 
         // Add a space between command line arguments.
         if (Index < CommandLineCount - 1)

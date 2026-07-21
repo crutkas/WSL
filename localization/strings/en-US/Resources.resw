@@ -1142,6 +1142,36 @@ Attempting web download...</value>
   <data name="MessageNoInstallDefault" xml:space="preserve">
     <value>No default distribution has been configured. Please provide a distribution to install.</value>
   </data>
+  <data name="MessageInstallResumeScheduled" xml:space="preserve">
+    <value>Installation will continue automatically after Windows restarts and you sign in.</value>
+  </data>
+  <data name="MessageInstallResumeBusy" xml:space="preserve">
+    <value>Another WSL installation is in progress. Wait for it to finish, then try again.</value>
+  </data>
+  <data name="MessageInstallResumeUnsupported" xml:space="preserve">
+    <value>This saved installation requires a newer version of WSL (state version {}). Update WSL and sign in again.</value>
+    <comment>{FixedPlaceholder="{}"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
+  <data name="MessageInstallResumeCorrupt" xml:space="preserve">
+    <value>The saved WSL installation state is invalid. Automatic installation was disabled and the state was preserved. Run 'wsl.exe --install' again.</value>
+    <comment>{Locked="--install'"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
+  <data name="MessageInstallResumeInconsistent" xml:space="preserve">
+    <value>The saved WSL installation and its startup entry do not match. Automatic installation was disabled. Run 'wsl.exe --install' again.</value>
+    <comment>{Locked="--install'"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
+  <data name="MessageInstallResumeAttemptsExhausted" xml:space="preserve">
+    <value>WSL could not finish installation after four restart attempts. Automatic installation was disabled. Run 'wsl.exe --install' again to retry.</value>
+    <comment>{Locked="--install'"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
+  <data name="MessageInstallResumeAmbiguousRegistration" xml:space="preserve">
+    <value>WSL cannot safely resume installation because distribution '{}' or its installation files may already exist. Automatic installation was disabled. Inspect 'wsl.exe --list --verbose', preserve any needed data, then retry with an unused name or location.</value>
+    <comment>{FixedPlaceholder="{}"}{Locked="--list "}{Locked="--verbose'"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
+  <data name="MessageInstallResumeRunCommandTooLong" xml:space="preserve">
+    <value>WSL cannot register automatic installation because its startup command exceeds the Windows Run limit. Move WSL to a shorter path and run 'wsl.exe --install' again.</value>
+    <comment>{Locked="--install'"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
   <data name="MessageConfigVirtio9pDisabled" xml:space="preserve">
     <value>wsl2.virtio9p is disabled, falling back to 9p with vsock transport.</value>
   </data>

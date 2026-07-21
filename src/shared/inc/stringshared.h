@@ -82,6 +82,48 @@ inline std::basic_string<T> Join(const std::vector<TInput>& Input, T Separator)
 }
 
 template <class T>
+inline std::basic_string<T> QuoteWindowsCommandLineArgument(std::basic_string_view<T> Argument)
+{
+    bool requiresQuotes = Argument.empty();
+    for (const auto character : Argument)
+    {
+        requiresQuotes |= character == static_cast<T>(' ') || character == static_cast<T>('\t') ||
+                          character == static_cast<T>('\r') || character == static_cast<T>('\n') || character == static_cast<T>('"');
+    }
+
+    if (!requiresQuotes)
+    {
+        return std::basic_string<T>{Argument};
+    }
+
+    std::basic_string<T> result(1, static_cast<T>('"'));
+    size_t backslashCount{};
+    for (const auto character : Argument)
+    {
+        if (character == static_cast<T>('"'))
+        {
+            result.append((backslashCount * 2) + 1, static_cast<T>('\\'));
+            backslashCount = 0;
+            result += character;
+        }
+        else if (character == static_cast<T>('\\'))
+        {
+            ++backslashCount;
+        }
+        else
+        {
+            result.append(backslashCount, static_cast<T>('\\'));
+            backslashCount = 0;
+            result += character;
+        }
+    }
+
+    result.append(backslashCount * 2, static_cast<T>('\\'));
+    result += static_cast<T>('"');
+    return result;
+}
+
+template <class T>
 inline std::vector<std::basic_string<T>> Split(const std::basic_string<T>& String, T Separator)
 {
     std::vector<std::basic_string<T>> Output;

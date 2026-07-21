@@ -14,6 +14,7 @@ Abstract:
 
 #include "precomp.h"
 #include "install.h"
+#include "InstallResume.h"
 #include "WslInstall.h"
 #include "HandleConsoleProgressBar.h"
 #include "Distribution.h"
@@ -51,6 +52,18 @@ struct LaunchProcessOptions
     std::optional<GUID> DistroGuid;
     std::wstring Username;
     ULONG LaunchFlags = LXSS_LAUNCH_FLAG_ENABLE_INTEROP | LXSS_LAUNCH_FLAG_TRANSLATE_ENVIRONMENT;
+};
+
+struct InstallOptions
+{
+    wsl::windows::common::installresume::Intent Intent;
+    std::optional<std::wstring> FromFile;
+    std::optional<GUID> ResumeGeneration;
+    bool NoDistribution{};
+    bool FeatureChild{};
+    bool PromptBeforeExit{};
+    bool Prerelease{};
+    bool WebDownloadRequested{};
 };
 
 struct ListOptions
@@ -437,184 +450,632 @@ int LaunchElevated(_In_ LPCWSTR commandLine)
     return static_cast<int>(exitCode);
 }
 
-int Install(_In_ std::wstring_view commandLine)
+InstallOptions ParseInstallOptions(_In_ std::wstring_view commandLine)
 {
-
-    // Parse options.
-    std::optional<std::wstring> distroArgument;
-    std::optional<std::wstring> fromFile;
-    std::optional<std::wstring> name;
+    InstallOptions options;
     std::optional<std::filesystem::path> location;
-    std::optional<ULONG> version;
-    std::optional<uint64_t> vhdSize;
-    bool fixedVhd = false;
-    bool installWslOptionalComponent = false;
-    bool noLaunchAfterInstall = false;
-    bool noDistribution = false;
-    bool legacy = false;
-    bool webDownload = IsWindowsServer();
+    std::optional<std::wstring> resumeGeneration;
 
     ArgumentParser parser(std::wstring{commandLine}, WSL_BINARY_NAME);
-    parser.AddPositionalArgument(distroArgument, 0);
-    parser.AddArgument(distroArgument, WSL_INSTALL_ARG_DIST_OPTION_LONG, WSL_INSTALL_ARG_DIST_OPTION);
-    parser.AddArgument(noLaunchAfterInstall, WSL_INSTALL_ARG_NO_LAUNCH_OPTION_LONG, WSL_INSTALL_ARG_NO_LAUNCH_OPTION);
-    parser.AddArgument(webDownload, WSL_INSTALL_ARG_WEB_DOWNLOAD_LONG);
-    parser.AddArgument(noDistribution, WSL_INSTALL_ARG_NO_DISTRIBUTION_OPTION);
-    parser.AddArgument(installWslOptionalComponent, WSL_INSTALL_ARG_ENABLE_WSL1_LONG);
-    parser.AddArgument(NoOp{}, WSL_INSTALL_ARG_PRERELEASE_LONG); // Unused but handled because argument may be present when invoked from inbox.
-    parser.AddArgument(fromFile, WSL_INSTALL_ARG_FROM_FILE_LONG, WSL_INSTALL_ARG_FROM_FILE_OPTION);
-    parser.AddArgument(name, WSL_INSTALL_ARG_NAME_LONG);
+    parser.AddPositionalArgument(options.Intent.Distribution, 0);
+    parser.AddArgument(options.Intent.Distribution, WSL_INSTALL_ARG_DIST_OPTION_LONG, WSL_INSTALL_ARG_DIST_OPTION);
+    parser.AddArgument(options.Intent.NoLaunch, WSL_INSTALL_ARG_NO_LAUNCH_OPTION_LONG, WSL_INSTALL_ARG_NO_LAUNCH_OPTION);
+    parser.AddArgument(options.WebDownloadRequested, WSL_INSTALL_ARG_WEB_DOWNLOAD_LONG);
+    parser.AddArgument(options.NoDistribution, WSL_INSTALL_ARG_NO_DISTRIBUTION_OPTION);
+    parser.AddArgument(options.Intent.EnableWsl1, WSL_INSTALL_ARG_ENABLE_WSL1_LONG);
+    parser.AddArgument(options.Prerelease, WSL_INSTALL_ARG_PRERELEASE_LONG);
+    parser.AddArgument(options.FromFile, WSL_INSTALL_ARG_FROM_FILE_LONG, WSL_INSTALL_ARG_FROM_FILE_OPTION);
+    parser.AddArgument(options.Intent.Name, WSL_INSTALL_ARG_NAME_LONG);
     parser.AddArgument(AbsolutePath(location), WSL_INSTALL_ARG_LOCATION_LONG, WSL_INSTALL_ARG_LOCATION_OPTION);
-    parser.AddArgument(legacy, WSL_INSTALL_ARG_LEGACY_LONG);
-    parser.AddArgument(WslVersion(version), WSL_INSTALL_ARG_VERSION);
-    parser.AddArgument(g_promptBeforeExit, WSL_INSTALL_ARG_PROMPT_BEFORE_EXIT_OPTION);
-    parser.AddArgument(SizeString(vhdSize), WSL_INSTALL_ARG_VHD_SIZE);
-    parser.AddArgument(fixedVhd, WSL_INSTALL_ARG_FIXED_VHD);
-
+    parser.AddArgument(options.Intent.Legacy, WSL_INSTALL_ARG_LEGACY_LONG);
+    parser.AddArgument(WslVersion(options.Intent.Version), WSL_INSTALL_ARG_VERSION);
+    parser.AddArgument(options.PromptBeforeExit, WSL_INSTALL_ARG_PROMPT_BEFORE_EXIT_OPTION);
+    parser.AddArgument(SizeString(options.Intent.VhdSize), WSL_INSTALL_ARG_VHD_SIZE);
+    parser.AddArgument(options.Intent.FixedVhd, WSL_INSTALL_ARG_FIXED_VHD);
+    parser.AddArgument(resumeGeneration, WSL_INSTALL_ARG_RESUME_LONG);
+    parser.AddArgument(options.FeatureChild, WSL_INSTALL_ARG_FEATURE_CHILD);
     parser.Parse();
 
-    if (noDistribution && distroArgument.has_value())
+    if (location.has_value())
+    {
+        options.Intent.Location = installresume::CanonicalizeLocation(location->wstring());
+    }
+
+    options.Intent.Selector = options.Intent.Distribution.has_value() ? installresume::DistributionSelector::Explicit
+                                                                      : installresume::DistributionSelector::Default;
+
+    if (resumeGeneration.has_value())
+    {
+        options.ResumeGeneration = installresume::GuidFromString(*resumeGeneration);
+        THROW_HR_IF(WSL_E_INVALID_USAGE, !options.ResumeGeneration.has_value());
+    }
+
+    if (options.ResumeGeneration.has_value())
+    {
+        THROW_HR_IF(
+            WSL_E_INVALID_USAGE,
+            options.Intent.Distribution.has_value() || options.Intent.Name.has_value() || options.Intent.Location.has_value() ||
+                options.Intent.Version.has_value() || options.Intent.VhdSize.has_value() || options.Intent.FixedVhd ||
+                options.Intent.Legacy || options.Intent.EnableWsl1 || options.Intent.NoLaunch || options.FromFile.has_value() ||
+                options.NoDistribution || options.FeatureChild || options.PromptBeforeExit || options.Prerelease ||
+                options.WebDownloadRequested);
+        return options;
+    }
+
+    if (options.FeatureChild)
+    {
+        THROW_HR_IF(
+            WSL_E_INVALID_USAGE,
+            !options.NoDistribution || options.Intent.Distribution.has_value() || options.Intent.Name.has_value() ||
+                options.Intent.Location.has_value() || options.Intent.Version.has_value() || options.Intent.VhdSize.has_value() ||
+                options.Intent.FixedVhd || options.Intent.Legacy || options.Intent.NoLaunch || options.FromFile.has_value() ||
+                options.PromptBeforeExit || options.Prerelease || options.WebDownloadRequested);
+        return options;
+    }
+
+    options.Intent.WebDownload = options.WebDownloadRequested || IsWindowsServer();
+    if (options.NoDistribution && options.Intent.Distribution.has_value())
     {
         THROW_HR_WITH_USER_ERROR(
             E_INVALIDARG, Localization::MessageArgumentsNotValidTogether(WSL_INSTALL_ARG_NO_DISTRIBUTION_OPTION, WSL_INSTALL_ARG_DIST_OPTION_LONG));
     }
-
-    if (fixedVhd && !vhdSize.has_value())
+    if (options.Intent.FixedVhd && !options.Intent.VhdSize.has_value())
     {
         THROW_HR_WITH_USER_ERROR(E_INVALIDARG, Localization::MessageArgumentNotValidWithout(WSL_INSTALL_ARG_FIXED_VHD, WSL_INSTALL_ARG_VHD_SIZE));
     }
-
-    // A distribution to be installed can be specified in three ways:
-    // wsl.exe --install --distribution Ubuntu
-    // wsl.exe --install Ubuntu
-    // wsl.exe --install
-    //
-    // N.B. The legacy method (specifying --distribution) is no longer documented,
-    // but is still supported to avoid breaking existing scripts.
-    if (fromFile.has_value())
+    if (options.FromFile.has_value() && options.Intent.Distribution.has_value())
     {
-        if (distroArgument.has_value())
+        THROW_HR_WITH_USER_ERROR(
+            E_INVALIDARG, Localization::MessageArgumentsNotValidTogether(WSL_INSTALL_ARG_FROM_FILE_LONG, WSL_INSTALL_ARG_DIST_OPTION_LONG));
+    }
+
+    if (!options.FromFile.has_value() && !options.NoDistribution)
+    {
+        if (options.Intent.Legacy)
         {
-            THROW_HR_WITH_USER_ERROR(
-                E_INVALIDARG, Localization::MessageArgumentsNotValidTogether(WSL_INSTALL_ARG_FROM_FILE_LONG, WSL_INSTALL_ARG_DIST_OPTION_LONG));
+            const std::list<std::pair<bool, LPCWSTR>> unsupportedArguments = {
+                {options.Intent.Name.has_value(), WSL_INSTALL_ARG_NAME_LONG},
+                {options.Intent.Location.has_value(), WSL_INSTALL_ARG_LOCATION_LONG},
+                {options.Intent.VhdSize.has_value(), WSL_INSTALL_ARG_VHD_SIZE},
+                {options.Intent.FixedVhd, WSL_INSTALL_ARG_FIXED_VHD}};
+            for (const auto& [condition, argument] : unsupportedArguments)
+            {
+                if (condition)
+                {
+                    THROW_HR_WITH_USER_ERROR(WSL_E_INVALID_USAGE, Localization::MessageNotSupportedOnLegacyDistros(argument).c_str());
+                }
+            }
         }
 
+        installresume::ValidateIntent(options.Intent);
+    }
+
+    return options;
+}
+
+bool RawValuesEqual(const installresume::RawRegistryValue& first, const installresume::RawRegistryValue& second)
+{
+    return first.Type == second.Type && first.Size == second.Size && first.Oversized == second.Oversized && first.Data == second.Data;
+}
+
+[[noreturn]] void ThrowVisibleResumeError(HRESULT result, const std::wstring& message)
+{
+    g_promptBeforeExit = true;
+    THROW_HR_WITH_USER_ERROR(result, message);
+}
+
+void DeleteTriggerIfGeneration(installresume::Store& store, const GUID& generation)
+{
+    const auto current = installresume::DecodeTrigger(store.ReadTrigger());
+    if (current.Kind == installresume::TriggerValueKind::Valid && installresume::AreEqual(*current.Generation, generation))
+    {
+        store.DeleteTrigger();
+    }
+}
+
+void DeleteCorruptTriggerIfUnchanged(installresume::Store& store, const installresume::TriggerValue& trigger)
+{
+    const auto current = installresume::DecodeTrigger(store.ReadTrigger());
+    if (trigger.Raw.has_value() && current.Raw.has_value() && RawValuesEqual(*trigger.Raw, *current.Raw))
+    {
+        store.DeleteTrigger();
+    }
+}
+
+installresume::State ReadActiveState(installresume::Store& store, const GUID& generation)
+{
+    const auto state = installresume::DecodeState(store.ReadState());
+    const auto trigger = installresume::DecodeTrigger(store.ReadTrigger());
+    if (state.Kind != installresume::StateValueKind::Valid || trigger.Kind != installresume::TriggerValueKind::Valid ||
+        !installresume::AreEqual(state.Value->Generation, generation) || !installresume::AreEqual(*trigger.Generation, generation))
+    {
+        ThrowVisibleResumeError(HRESULT_FROM_WIN32(ERROR_INVALID_STATE), Localization::MessageInstallResumeInconsistent());
+    }
+
+    return *state.Value;
+}
+
+void PersistActiveState(installresume::Store& store, const installresume::State& state)
+{
+    std::ignore = ReadActiveState(store, state.Generation);
+    store.WriteState(installresume::SerializeState(state));
+}
+
+void ClearActiveState(installresume::Store& store, const GUID& generation)
+{
+    std::ignore = ReadActiveState(store, generation);
+    store.DeleteState();
+    DeleteTriggerIfGeneration(store, generation);
+}
+
+void RetireExplicitInstallState(installresume::Store& store)
+{
+    const auto state = installresume::DecodeState(store.ReadState());
+    if (state.Kind == installresume::StateValueKind::Unsupported)
+    {
+        THROW_HR_WITH_USER_ERROR(
+            HRESULT_FROM_WIN32(ERROR_REVISION_MISMATCH), Localization::MessageInstallResumeUnsupported(state.UnsupportedVersion.value()));
+    }
+
+    store.DeleteTrigger();
+    if (state.Kind == installresume::StateValueKind::Corrupt && state.Raw.has_value())
+    {
+        store.QuarantineState(L"Invalid version 1 install-resume state");
+    }
+    else
+    {
+        store.DeleteState();
+    }
+}
+
+void ArmInstallResume(installresume::Store& store, const installresume::Intent& intent)
+{
+    installresume::State state;
+    state.Generation = installresume::CreateGeneration();
+    state.WriterVersion = TEXT(WSL_PACKAGE_VERSION);
+    state.LastAutomaticBootId = installresume::GetCurrentBootId();
+    state.InstallIntent = intent;
+
+    std::wstring command;
+    const auto commandResult = wil::ResultFromException(
+        [&]() { command = installresume::BuildRunCommand(installresume::GetStableLauncherPath(), state.Generation); });
+    if (commandResult == HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW))
+    {
+        THROW_HR_WITH_USER_ERROR(commandResult, Localization::MessageInstallResumeRunCommandTooLong());
+    }
+    THROW_IF_FAILED(commandResult);
+
+    const auto serialized = installresume::SerializeState(state);
+    store.WriteState(serialized);
+    store.WriteTrigger(command);
+    wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstallResumeScheduled());
+}
+
+void LogDistributionInstall(HRESULT result, const WslInstall::InstallResult& installResult)
+{
+    const Distribution* legacyDistro{};
+    std::optional<std::wstring> flavor;
+    if (installResult.Distribution.has_value())
+    {
+        if (const auto* distro = std::get_if<ModernDistributionVersion>(&*installResult.Distribution))
+        {
+            flavor = distro->Name;
+        }
+        else
+        {
+            legacyDistro = std::get_if<Distribution>(&*installResult.Distribution);
+            WI_ASSERT(legacyDistro != nullptr);
+            flavor = legacyDistro->Name;
+        }
+    }
+
+    WSL_LOG_TELEMETRY(
+        "InstallDistribution",
+        PDT_ProductAndServiceUsage,
+        TraceLoggingValue(result, "result"),
+        TraceLoggingValue(legacyDistro == nullptr, "modern"),
+        TraceLoggingValue(flavor.value_or(L"<none>").c_str(), "flavor"));
+}
+
+int CompleteDistributionInstall(const WslInstall::InstallResult& installResult, bool noLaunchAfterInstall, installresume::ScopedMutex& installMutex)
+{
+    if (!installResult.Alreadyinstalled)
+    {
+        wsl::windows::common::wslutil::PrintMessage(Localization::MessageDistributionInstalled(installResult.Name));
+    }
+    if (noLaunchAfterInstall)
+    {
+        return 0;
+    }
+
+    wsl::windows::common::wslutil::PrintMessage(Localization::MessageLaunchingDistro(installResult.Name), stdout);
+    installMutex.Release();
+
+    if (installResult.Distribution.has_value())
+    {
+        if (const auto* legacyDistro = std::get_if<Distribution>(&*installResult.Distribution))
+        {
+            wsl::windows::common::distribution::Launch(*legacyDistro, installResult.InstalledViaGitHub, !installResult.Alreadyinstalled);
+            return 0;
+        }
+    }
+
+    THROW_HR_IF(E_UNEXPECTED, !installResult.Id.has_value());
+    LaunchProcessOptions launchOptions{};
+    launchOptions.DistroGuid = *installResult.Id;
+    return LaunchProcess(nullptr, 0, nullptr, launchOptions);
+}
+
+bool IsDistributionAbsent(std::wstring_view name)
+{
+    SvcComm service;
+    const std::wstring nullTerminated{name};
+    const auto result = wil::ResultFromException(
+        [&]() { std::ignore = service.GetDistributionId(nullTerminated.c_str(), LXSS_GET_DISTRO_ID_LIST_ALL); });
+    if (SUCCEEDED(result))
+    {
+        return false;
+    }
+
+    THROW_HR_IF(result, result != WSL_E_DISTRO_NOT_FOUND);
+    return true;
+}
+
+[[noreturn]] void ThrowAmbiguousRegistration(installresume::Store& store, const installresume::State& state)
+{
+    DeleteTriggerIfGeneration(store, state.Generation);
+    ThrowVisibleResumeError(
+        HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS),
+        Localization::MessageInstallResumeAmbiguousRegistration(
+            state.DistroRegistration.TargetName.value_or(state.InstallIntent.Name.value_or(L"<unknown>"))));
+}
+
+int ResumeInstall(const GUID& runnerGeneration, installresume::ScopedMutex& installMutex, installresume::Store& store)
+{
+    const auto stateValue = installresume::DecodeState(store.ReadState());
+    const auto triggerValue = installresume::DecodeTrigger(store.ReadTrigger());
+    const auto recovery = installresume::EvaluateAutomaticRecovery(stateValue, triggerValue, runnerGeneration);
+    switch (recovery.Action)
+    {
+    case installresume::RecoveryAction::Quiet:
+        return 0;
+
+    case installresume::RecoveryAction::ClearOrphanTrigger:
+        DeleteTriggerIfGeneration(store, runnerGeneration);
+        return 0;
+
+    case installresume::RecoveryAction::DisarmTrigger:
+        if (triggerValue.Kind == installresume::TriggerValueKind::Valid)
+        {
+            DeleteTriggerIfGeneration(store, runnerGeneration);
+        }
+        else
+        {
+            DeleteCorruptTriggerIfUnchanged(store, triggerValue);
+        }
+        if (recovery.VisibleFailure)
+        {
+            ThrowVisibleResumeError(HRESULT_FROM_WIN32(ERROR_INVALID_STATE), Localization::MessageInstallResumeInconsistent());
+        }
+        return 0;
+
+    case installresume::RecoveryAction::QuarantineState:
+        if (triggerValue.Kind == installresume::TriggerValueKind::Valid)
+        {
+            DeleteTriggerIfGeneration(store, runnerGeneration);
+        }
+        else
+        {
+            DeleteCorruptTriggerIfUnchanged(store, triggerValue);
+        }
+        if (stateValue.Raw.has_value())
+        {
+            const auto current = installresume::DecodeState(store.ReadState());
+            if (current.Raw.has_value() && RawValuesEqual(*stateValue.Raw, *current.Raw))
+            {
+                store.QuarantineState(L"Invalid version 1 install-resume state");
+            }
+        }
+        ThrowVisibleResumeError(HRESULT_FROM_WIN32(ERROR_INVALID_DATA), Localization::MessageInstallResumeCorrupt());
+
+    case installresume::RecoveryAction::ReportUnsupported:
+        ThrowVisibleResumeError(
+            HRESULT_FROM_WIN32(ERROR_REVISION_MISMATCH),
+            Localization::MessageInstallResumeUnsupported(stateValue.UnsupportedVersion.value()));
+
+    case installresume::RecoveryAction::Run:
+        break;
+    }
+
+    auto state = *stateValue.Value;
+    const auto currentBootId = installresume::GetCurrentBootId();
+    const auto attemptAction = installresume::EvaluateAutomaticAttempt(state, currentBootId);
+    if (attemptAction == installresume::AttemptAction::SameBoot)
+    {
+        return 0;
+    }
+
+    if (attemptAction == installresume::AttemptAction::CompleteCommitted)
+    {
+        SvcComm service;
+        GUID installedId{};
+        const auto result = wil::ResultFromException(
+            [&]() { installedId = service.GetDistributionId(state.DistroRegistration.TargetName->c_str(), 0); });
+        if (FAILED(result) || !installresume::AreEqual(installedId, *state.DistroRegistration.CommittedId))
+        {
+            ThrowAmbiguousRegistration(store, state);
+        }
+
+        WslInstall::InstallResult installResult;
+        installResult.Name = *state.DistroRegistration.InstalledName;
+        installResult.Id = installedId;
+        ClearActiveState(store, state.Generation);
+        return CompleteDistributionInstall(installResult, state.InstallIntent.NoLaunch, installMutex);
+    }
+    if (attemptAction == installresume::AttemptAction::Exhausted)
+    {
+        DeleteTriggerIfGeneration(store, state.Generation);
+        ThrowVisibleResumeError(HRESULT_FROM_WIN32(ERROR_RETRY), Localization::MessageInstallResumeAttemptsExhausted());
+    }
+
+    if (state.CurrentPhase == installresume::Phase::InstallingDistribution &&
+        state.DistroRegistration.Status == installresume::RegistrationStatus::Started)
+    {
+        if (!IsDistributionAbsent(*state.DistroRegistration.TargetName) || !installresume::IsRetryPathSafe(state.InstallIntent.Location))
+        {
+            ThrowAmbiguousRegistration(store, state);
+        }
+
+        state.DistroRegistration.Status = installresume::RegistrationStatus::Prepared;
+        PersistActiveState(store, state);
+    }
+
+    installresume::ReserveAutomaticAttempt(state, currentBootId);
+    PersistActiveState(store, state);
+
+    WslInstall::InstallResult installResult;
+    bool stateCleanupStarted{};
+    try
+    {
+        std::ignore = ReadActiveState(store, state.Generation);
+        const bool rebootRequired = InstallPrerequisites(state.InstallIntent.EnableWsl1);
+        if (rebootRequired)
+        {
+            installresume::CompleteAutomaticAttempt(state);
+            PersistActiveState(store, state);
+            wsl::windows::common::wslutil::PrintSystemError(ERROR_SUCCESS_REBOOT_REQUIRED);
+            return 0;
+        }
+
+        WslInstall::InstallCallbacks callbacks;
+        callbacks.ModernDistributionResolved = [&](const ModernDistributionVersion& distribution, std::wstring_view targetName) {
+            if (state.CurrentPhase == installresume::Phase::InstallingDistribution)
+            {
+                THROW_HR_IF(
+                    HRESULT_FROM_WIN32(ERROR_INVALID_STATE),
+                    state.DistroRegistration.Status != installresume::RegistrationStatus::Prepared ||
+                        state.DistroRegistration.DistributionName != distribution.Name || state.DistroRegistration.TargetName != targetName);
+            }
+            else
+            {
+                state.CurrentPhase = installresume::Phase::InstallingDistribution;
+                state.DistroRegistration.Status = installresume::RegistrationStatus::Prepared;
+                state.DistroRegistration.DistributionName = distribution.Name;
+                state.DistroRegistration.TargetName = targetName;
+            }
+
+            PersistActiveState(store, state);
+        };
+        callbacks.ModernRegistrationStarting = [&]() {
+            THROW_HR_IF(
+                HRESULT_FROM_WIN32(ERROR_INVALID_STATE),
+                state.CurrentPhase != installresume::Phase::InstallingDistribution ||
+                    state.DistroRegistration.Status != installresume::RegistrationStatus::Prepared);
+            state.DistroRegistration.Status = installresume::RegistrationStatus::Started;
+            PersistActiveState(store, state);
+        };
+        std::ignore = ReadActiveState(store, state.Generation);
+        std::ignore = ReadActiveState(store, state.Generation);
+        const auto result = WslInstall::InstallDistribution(
+            installResult,
+            state.InstallIntent.Distribution,
+            state.InstallIntent.Version,
+            false,
+            state.InstallIntent.WebDownload,
+            state.InstallIntent.Legacy,
+            state.InstallIntent.FixedVhd,
+            state.InstallIntent.Name,
+            state.InstallIntent.Location,
+            state.InstallIntent.VhdSize,
+            callbacks);
+        LogDistributionInstall(result, installResult);
+        THROW_IF_FAILED(result);
+
+        if (installResult.Id.has_value())
+        {
+            THROW_HR_IF(
+                HRESULT_FROM_WIN32(ERROR_INVALID_STATE),
+                state.CurrentPhase != installresume::Phase::InstallingDistribution ||
+                    state.DistroRegistration.Status != installresume::RegistrationStatus::Started);
+            state.CurrentPhase = installresume::Phase::DistributionCommitted;
+            state.DistroRegistration.Status = installresume::RegistrationStatus::Committed;
+            state.DistroRegistration.InstalledName = installResult.Name;
+            state.DistroRegistration.CommittedId = installResult.Id;
+        }
+
+        installresume::CompleteAutomaticAttempt(state);
+        PersistActiveState(store, state);
+        stateCleanupStarted = true;
+        ClearActiveState(store, state.Generation);
+    }
+    catch (...)
+    {
+        const auto result = wil::ResultFromCaughtException();
+        if (stateCleanupStarted)
+        {
+            g_promptBeforeExit = true;
+            throw;
+        }
+
+        if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED))
+        {
+            installresume::CancelAutomaticAttempt(state);
+            PersistActiveState(store, state);
+            return 0;
+        }
+
+        if (state.AttemptInProgress)
+        {
+            installresume::CompleteAutomaticAttempt(state);
+        }
+
+        bool ambiguous = result == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
+        if (state.CurrentPhase == installresume::Phase::InstallingDistribution &&
+            state.DistroRegistration.Status == installresume::RegistrationStatus::Started)
+        {
+            const auto retryCheck = wil::ResultFromException([&]() {
+                if (IsDistributionAbsent(*state.DistroRegistration.TargetName) &&
+                    installresume::IsRetryPathSafe(state.InstallIntent.Location))
+                {
+                    state.DistroRegistration.Status = installresume::RegistrationStatus::Prepared;
+                }
+                else
+                {
+                    ambiguous = true;
+                }
+            });
+            ambiguous |= FAILED(retryCheck);
+        }
+
+        PersistActiveState(store, state);
+        if (ambiguous)
+        {
+            ThrowAmbiguousRegistration(store, state);
+        }
+
+        g_promptBeforeExit = true;
+        throw;
+    }
+
+    return CompleteDistributionInstall(installResult, state.InstallIntent.NoLaunch, installMutex);
+}
+
+int Install(_In_ std::wstring_view commandLine)
+{
+    auto options = ParseInstallOptions(commandLine);
+    g_promptBeforeExit |= options.PromptBeforeExit;
+
+    if (options.FeatureChild)
+    {
+        const bool rebootRequired = InstallPrerequisites(options.Intent.EnableWsl1);
+        wsl::windows::common::wslutil::PrintSystemError(rebootRequired ? ERROR_SUCCESS_REBOOT_REQUIRED : NO_ERROR);
+        return 0;
+    }
+
+    installresume::ScopedMutex installMutex;
+    if (installMutex.Result() == installresume::MutexAcquireResult::Timeout)
+    {
+        if (options.ResumeGeneration.has_value())
+        {
+            return 0;
+        }
+
+        THROW_HR_WITH_USER_ERROR(HRESULT_FROM_WIN32(ERROR_BUSY), Localization::MessageInstallResumeBusy());
+    }
+    if (installMutex.Result() == installresume::MutexAcquireResult::Abandoned)
+    {
+        LOG_HR_MSG(HRESULT_FROM_WIN32(ERROR_ABANDONED_WAIT_0), "Recovered abandoned WSL install-resume mutex");
+    }
+
+    installresume::RegistryStore store;
+    if (options.ResumeGeneration.has_value())
+    {
+        return ResumeInstall(*options.ResumeGeneration, installMutex, store);
+    }
+
+    RetireExplicitInstallState(store);
+
+    if (options.FromFile.has_value())
+    {
         wil::unique_hfile diskFile;
         HANDLE file{};
-        if (fromFile.value() == WSL_IMPORT_ARG_STDIN)
+        auto displayName = *options.FromFile;
+        if (*options.FromFile == WSL_IMPORT_ARG_STDIN)
         {
             file = GetStdHandle(STD_INPUT_HANDLE);
-            fromFile = L"<stdin>";
+            displayName = L"<stdin>";
         }
         else
         {
             diskFile.reset(CreateFileW(
-                fromFile->c_str(), GENERIC_READ, (FILE_SHARE_READ | FILE_SHARE_DELETE), nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-
+                options.FromFile->c_str(), GENERIC_READ, (FILE_SHARE_READ | FILE_SHARE_DELETE), nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
             THROW_LAST_ERROR_IF(!diskFile);
-
             file = diskFile.get();
         }
 
-        wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstalling(fromFile->c_str()));
+        wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstalling(displayName.c_str()));
         wsl::windows::common::HandleConsoleProgressBar progressBar(file, Localization::MessageImportProgress());
 
         SvcComm service;
         auto [id, installedName] = service.RegisterDistribution(
-            name.has_value() ? name->c_str() : nullptr,
-            version.value_or(LXSS_WSL_VERSION_DEFAULT),
+            options.Intent.Name.has_value() ? options.Intent.Name->c_str() : nullptr,
+            options.Intent.Version.value_or(LXSS_WSL_VERSION_DEFAULT),
             file,
-            location.has_value() ? location->c_str() : nullptr,
-            fixedVhd ? LXSS_IMPORT_DISTRO_FLAGS_FIXED_VHD : 0,
-            vhdSize);
+            options.Intent.Location.has_value() ? options.Intent.Location->c_str() : nullptr,
+            options.Intent.FixedVhd ? LXSS_IMPORT_DISTRO_FLAGS_FIXED_VHD : 0,
+            options.Intent.VhdSize);
 
         wsl::windows::common::wslutil::PrintMessage(Localization::MessageDistributionInstalled(installedName.get()), stdout);
-
-        if (!noLaunchAfterInstall)
+        if (!options.Intent.NoLaunch)
         {
             wsl::windows::common::wslutil::PrintMessage(Localization::MessageLaunchingDistro(installedName.get()), stdout);
-
-            LaunchProcessOptions options{};
-            options.DistroGuid = id;
-            return LaunchProcess(nullptr, 0, nullptr, options);
+            installMutex.Release();
+            LaunchProcessOptions launchOptions{};
+            launchOptions.DistroGuid = id;
+            return LaunchProcess(nullptr, 0, nullptr, launchOptions);
         }
 
         return 0;
     }
 
-    bool rebootRequired = InstallPrerequisites(installWslOptionalComponent);
-    noLaunchAfterInstall |= rebootRequired;
+    const bool rebootRequired = InstallPrerequisites(options.Intent.EnableWsl1);
+    const bool noLaunchAfterInstall = options.Intent.NoLaunch || rebootRequired;
 
-    // Install a distribution only if no reboot is required, or if we're on the --legacy path (to maintain old behavior).
-    const Distribution* legacyDistro = nullptr;
-
-    WslInstall::InstallResult installResult{};
-    if (!noDistribution && (legacy || !rebootRequired))
+    WslInstall::InstallResult installResult;
+    if (!options.NoDistribution && (options.Intent.Legacy || !rebootRequired))
     {
-        auto result = WslInstall::InstallDistribution(
-            installResult, distroArgument, version, !noLaunchAfterInstall, webDownload, legacy, fixedVhd, name, location, vhdSize);
-
-        std::optional<std::wstring> flavor;
-        if (installResult.Distribution.has_value())
-        {
-            if (const auto* distro = std::get_if<ModernDistributionVersion>(&*installResult.Distribution))
-            {
-                flavor = distro->Name;
-            }
-            else
-            {
-                legacyDistro = std::get_if<Distribution>(&*installResult.Distribution);
-                WI_ASSERT(legacyDistro != nullptr);
-
-                flavor = legacyDistro->Name;
-            }
-        }
-
-        // Logs when a specific distribution is installed, and whether that was successful. Used to report distro usage to distro maintainers
-        WSL_LOG_TELEMETRY(
-            "InstallDistribution",
-            PDT_ProductAndServiceUsage,
-            TraceLoggingValue(result, "result"),
-            TraceLoggingValue(legacyDistro == nullptr, "modern"),
-            TraceLoggingValue(flavor.value_or(L"<none>").c_str(), "flavor"));
-
+        const auto result = WslInstall::InstallDistribution(
+            installResult,
+            options.Intent.Distribution,
+            options.Intent.Version,
+            !noLaunchAfterInstall,
+            options.Intent.WebDownload,
+            options.Intent.Legacy,
+            options.Intent.FixedVhd,
+            options.Intent.Name,
+            options.Intent.Location,
+            options.Intent.VhdSize);
+        LogDistributionInstall(result, installResult);
         THROW_IF_FAILED(result);
     }
 
     if (rebootRequired)
     {
+        if (!options.NoDistribution && !options.Intent.Legacy)
+        {
+            ArmInstallResume(store, options.Intent);
+        }
+
         wsl::windows::common::wslutil::PrintSystemError(ERROR_SUCCESS_REBOOT_REQUIRED);
+        return 0;
     }
-    else if (noDistribution)
+    if (options.NoDistribution)
     {
         wsl::windows::common::wslutil::PrintSystemError(NO_ERROR);
-    }
-    else
-    {
-        if (!installResult.Alreadyinstalled)
-        {
-            wsl::windows::common::wslutil::PrintMessage(Localization::MessageDistributionInstalled(installResult.Name));
-        }
-
-        if (!noLaunchAfterInstall)
-        {
-            wsl::windows::common::wslutil::PrintMessage(Localization::MessageLaunchingDistro(installResult.Name), stdout);
-
-            if (legacyDistro != nullptr)
-            {
-                wsl::windows::common::distribution::Launch(*legacyDistro, installResult.InstalledViaGitHub, !installResult.Alreadyinstalled);
-            }
-            else
-            {
-                LaunchProcessOptions options{};
-                options.DistroGuid = installResult.Id.value();
-
-                return LaunchProcess(nullptr, 0, nullptr, options);
-            }
-        }
+        return 0;
     }
 
-    return 0;
+    return CompleteDistributionInstall(installResult, noLaunchAfterInstall, installMutex);
 }
 
 bool InstallPrerequisites(_In_ bool installWslOptionalComponent)
@@ -648,7 +1109,11 @@ bool InstallPrerequisites(_In_ bool installWslOptionalComponent)
     if (!elevated)
     {
         const auto elevatedCommand = std::format(
-            L"{} {} {}", WSL_INSTALL_ARG, WSL_INSTALL_ARG_NO_DISTRIBUTION_OPTION, installWslOptionalComponent ? WSL_INSTALL_ARG_ENABLE_WSL1_LONG : L"");
+            L"{} {} {} {}",
+            WSL_INSTALL_ARG,
+            WSL_INSTALL_ARG_NO_DISTRIBUTION_OPTION,
+            WSL_INSTALL_ARG_FEATURE_CHILD,
+            installWslOptionalComponent ? WSL_INSTALL_ARG_ENABLE_WSL1_LONG : L"");
 
         const auto exitCode = LaunchElevated(elevatedCommand.c_str());
         if (exitCode != 0)

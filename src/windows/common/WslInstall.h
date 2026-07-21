@@ -34,6 +34,12 @@ public:
         bool Alreadyinstalled{};
     };
 
+    struct InstallCallbacks
+    {
+        std::function<void(const wsl::windows::common::distribution::ModernDistributionVersion&, std::wstring_view)> ModernDistributionResolved;
+        std::function<void()> ModernRegistrationStarting;
+    };
+
     static HRESULT InstallDistribution(
         _Out_ InstallResult& installResult,
         _In_ const std::optional<std::wstring>& distributionName,
@@ -44,7 +50,8 @@ public:
         _In_ bool fixedVhd,
         _In_ const std::optional<std::wstring>& localName,
         _In_ const std::optional<std::wstring>& location,
-        _In_ const std::optional<uint64_t>& vhdSize);
+        _In_ const std::optional<uint64_t>& vhdSize,
+        _In_ const InstallCallbacks& callbacks = {});
 
     struct OptionalComponentRequirements
     {
@@ -89,5 +96,6 @@ public:
         const std::optional<std::wstring>& name,
         const std::optional<std::wstring>& location,
         const std::optional<uint64_t>& vhdSize,
-        const bool fixedVhd);
+        const bool fixedVhd,
+        const InstallCallbacks& callbacks = {});
 };

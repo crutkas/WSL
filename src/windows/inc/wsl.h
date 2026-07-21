@@ -38,6 +38,7 @@ Abstract:
 #define WSL_INSTALL_ARG_DIST_OPTION_LONG L"--distribution"
 #define WSL_INSTALL_ARG_ENABLE_WSL1_LONG L"--enable-wsl1"
 #define WSL_INSTALL_ARG_FIXED_VHD L"--fixed-vhd"
+#define WSL_INSTALL_ARG_FEATURE_CHILD L"--feature-install-child"
 #define WSL_INSTALL_ARG_FROM_FILE_OPTION L'f'
 #define WSL_INSTALL_ARG_FROM_FILE_LONG L"--from-file"
 #define WSL_INSTALL_ARG_LEGACY_LONG L"--legacy"
@@ -52,6 +53,7 @@ Abstract:
 #define WSL_INSTALL_ARG_WEB_DOWNLOAD_LONG L"--web-download"
 #define WSL_INSTALL_ARG_PRERELEASE_LONG L"--pre-release"
 #define WSL_INSTALL_ARG_PROMPT_BEFORE_EXIT_OPTION L"--prompt-before-exit"
+#define WSL_INSTALL_ARG_RESUME_LONG L"--resume"
 #define WSL_LIST_ARG L"-l"
 #define WSL_LIST_ARG_LONG L"--list"
 #define WSL_LIST_ARG_ALL_OPTION L"--all"

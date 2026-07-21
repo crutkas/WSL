@@ -4,6 +4,7 @@ set(SOURCES
     MountTests.cpp
     NetworkTests.cpp
     OptionalFeatureTests.cpp
+    InstallResumeTests.cpp
     Plan9Tests.cpp
     DrvFsTests.cpp
     Common.cpp

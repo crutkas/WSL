@@ -18,6 +18,7 @@ set(SOURCES
     hcs.cpp
     helpers.cpp
     hvsocket.cpp
+    InstallResume.cpp
     interop.cpp
     HandleIO.cpp
     Localization.cpp
@@ -105,6 +106,7 @@ set(HEADERS
     hcs_schema.h
     helpers.hpp
     hvsocket.hpp
+    InstallResume.h
     INetworkingEngine.h
     interop.hpp
     HandleIO.h
