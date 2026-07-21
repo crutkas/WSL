@@ -16,6 +16,12 @@ enum class State
     EnablePending = 3
 };
 
+enum class DependencyBehavior
+{
+    FeatureOnly,
+    All
+};
+
 namespace details {
     enum class DismFeatureState : unsigned int
     {
@@ -32,16 +38,17 @@ namespace details {
     State MapDismFeatureState(DismFeatureState state);
 } // namespace details
 
-class Query
+class Session
 {
 public:
-    Query();
-    ~Query();
+    Session();
+    ~Session();
 
-    NON_COPYABLE(Query);
-    NON_MOVABLE(Query);
+    NON_COPYABLE(Session);
+    NON_MOVABLE(Session);
 
     State GetState(std::wstring_view featureName);
+    DWORD Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior);
 
 private:
     class Impl;

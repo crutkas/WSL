@@ -8,6 +8,7 @@ using DismSession = unsigned int;
 
 constexpr DismSession c_dismSessionDefault = 0;
 constexpr auto c_dismOnlineImage = L"DISM_{53BFAE52-B167-4E2F-A258-0A37B57FF845}";
+constexpr HRESULT c_dismReloadImageSessionRequired = 0x00000001;
 std::mutex g_dismLock;
 
 enum class DismLogLevel
@@ -35,6 +36,9 @@ using DismShutdownFunction = HRESULT WINAPI();
 using DismOpenSessionFunction = HRESULT WINAPI(PCWSTR, PCWSTR, PCWSTR, DismSession*);
 using DismCloseSessionFunction = HRESULT WINAPI(DismSession);
 using DismGetFeatureInfoFunction = HRESULT WINAPI(DismSession, PCWSTR, PCWSTR, DismPackageIdentifier, DismFeatureInfo**);
+using DismProgressCallback = void(CALLBACK*)(UINT, UINT, PVOID);
+using DismEnableFeatureFunction = HRESULT WINAPI(
+    DismSession, PCWSTR, PCWSTR, DismPackageIdentifier, BOOL, PCWSTR*, UINT, BOOL, HANDLE, DismProgressCallback, PVOID);
 using DismDeleteFunction = HRESULT WINAPI(void*);
 
 wil::shared_hmodule LoadDismApi()
@@ -69,7 +73,7 @@ State details::MapDismFeatureState(DismFeatureState state)
     }
 }
 
-class Query::Impl
+class Session::Impl
 {
 public:
     Impl() :
@@ -80,6 +84,7 @@ public:
         m_openSession{m_module, "DismOpenSession"},
         m_closeSession{m_module, "DismCloseSession"},
         m_getFeatureInfo{m_module, "DismGetFeatureInfo"},
+        m_enableFeature{m_module, "DismEnableFeature"},
         m_delete{m_module, "DismDelete"}
     {
         THROW_IF_FAILED(m_initialize(DismLogLevel::ErrorsWarnings, nullptr, nullptr));
@@ -116,7 +121,42 @@ public:
         return details::MapDismFeatureState(featureInfo->FeatureState);
     }
 
+    DWORD Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior)
+    {
+        THROW_HR_IF(E_INVALIDARG, featureName.empty());
+        THROW_HR_IF(E_INVALIDARG, dependencyBehavior != DependencyBehavior::FeatureOnly && dependencyBehavior != DependencyBehavior::All);
+
+        const std::wstring nullTerminatedName{featureName};
+        const auto result = m_enableFeature(
+            m_session,
+            nullTerminatedName.c_str(),
+            nullptr,
+            DismPackageIdentifier::None,
+            FALSE,
+            nullptr,
+            0,
+            dependencyBehavior == DependencyBehavior::All ? TRUE : FALSE,
+            nullptr,
+            nullptr,
+            nullptr);
+
+        if (result == c_dismReloadImageSessionRequired)
+        {
+            ReloadSession();
+            return ERROR_SUCCESS;
+        }
+
+        return static_cast<DWORD>(result);
+    }
+
 private:
+    void ReloadSession()
+    {
+        THROW_IF_FAILED(m_closeSession(m_session));
+        m_session = c_dismSessionDefault;
+        THROW_IF_FAILED(m_openSession(c_dismOnlineImage, nullptr, nullptr, &m_session));
+    }
+
     std::unique_lock<std::mutex> m_dismLock;
     wil::shared_hmodule m_module;
     LxssDynamicFunction<DismInitializeFunction> m_initialize;
@@ -124,19 +164,25 @@ private:
     LxssDynamicFunction<DismOpenSessionFunction> m_openSession;
     LxssDynamicFunction<DismCloseSessionFunction> m_closeSession;
     LxssDynamicFunction<DismGetFeatureInfoFunction> m_getFeatureInfo;
+    LxssDynamicFunction<DismEnableFeatureFunction> m_enableFeature;
     LxssDynamicFunction<DismDeleteFunction> m_delete;
     DismSession m_session{c_dismSessionDefault};
     bool m_initialized{};
 };
 
-Query::Query() : m_impl{std::make_unique<Impl>()}
+Session::Session() : m_impl{std::make_unique<Impl>()}
 {
 }
 
-Query::~Query() = default;
+Session::~Session() = default;
 
-State Query::GetState(std::wstring_view featureName)
+State Session::GetState(std::wstring_view featureName)
 {
     return m_impl->GetState(featureName);
+}
+
+DWORD Session::Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior)
+{
+    return m_impl->Enable(featureName, dependencyBehavior);
 }
 } // namespace wsl::windows::common::optionalfeature

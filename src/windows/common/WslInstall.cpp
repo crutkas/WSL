@@ -189,9 +189,9 @@ CATCH_RETURN()
 
 WslInstall::OptionalComponentRequirements WslInstall::CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent)
 {
-    wsl::windows::common::optionalfeature::Query query;
+    wsl::windows::common::optionalfeature::Session session;
     return CheckForMissingOptionalComponents(
-        requireWslOptionalComponent, [&](std::wstring_view featureName) { return query.GetState(featureName); });
+        requireWslOptionalComponent, [&](std::wstring_view featureName) { return session.GetState(featureName); });
 }
 
 WslInstall::OptionalComponentRequirements WslInstall::CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent, const OptionalFeatureStateQuery& queryFeatureState)
@@ -215,37 +215,48 @@ WslInstall::OptionalComponentRequirements WslInstall::EvaluateOptionalComponentR
     return requirements;
 }
 
-DWORD WslInstall::InstallOptionalComponent(LPCWSTR component, bool consoleOutput)
+DWORD WslInstall::InstallOptionalComponent(std::wstring_view component)
 {
-    std::wstring systemDirectory;
-    THROW_IF_FAILED(wil::GetSystemDirectoryW(systemDirectory));
-
-    const auto dismPath = std::filesystem::path(std::move(systemDirectory)) / L"dism.exe";
-
-    auto commandLine = std::format(L"{} /Online /NoRestart /enable-feature /featurename:{}", dismPath.native(), component);
-
-    wsl::windows::common::SubProcess process(nullptr, commandLine.c_str());
-    if (!consoleOutput)
-    {
-        process.SetFlags(CREATE_NEW_CONSOLE);
-        process.SetShowWindow(SW_HIDE);
-    }
-
-    return process.Run();
+    wsl::windows::common::optionalfeature::Session session;
+    return InstallOptionalComponent(
+        component, [&](std::wstring_view featureName, wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior) {
+            return session.Enable(featureName, dependencyBehavior);
+        });
 }
 
 void WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& components)
 {
+    if (components.empty())
+    {
+        return;
+    }
+
+    wsl::windows::common::optionalfeature::Session session;
+    InstallOptionalComponents(components, [&](std::wstring_view featureName, wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior) {
+        return session.Enable(featureName, dependencyBehavior);
+    });
+}
+
+void WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& components, const OptionalFeatureEnable& enableFeature)
+{
+    THROW_HR_IF(E_INVALIDARG, !enableFeature);
+
     for (const auto& component : components)
     {
         wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstallingWindowsComponent(component));
 
-        const auto exitCode = InstallOptionalComponent(component.c_str(), true);
+        const auto exitCode = InstallOptionalComponent(component, enableFeature);
         if (exitCode != 0 && exitCode != ERROR_SUCCESS_REBOOT_REQUIRED)
         {
             THROW_HR_WITH_USER_ERROR(WSL_E_INSTALL_COMPONENT_FAILED, Localization::MessageOptionalComponentInstallFailed(component, exitCode));
         }
     }
+}
+
+DWORD WslInstall::InstallOptionalComponent(std::wstring_view component, const OptionalFeatureEnable& enableFeature)
+{
+    THROW_HR_IF(E_INVALIDARG, component.empty() || !enableFeature);
+    return enableFeature(component, wsl::windows::common::optionalfeature::DependencyBehavior::All);
 }
 
 std::pair<std::wstring, GUID> WslInstall::InstallModernDistribution(

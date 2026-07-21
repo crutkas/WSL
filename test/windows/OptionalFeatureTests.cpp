@@ -6,6 +6,7 @@
 #include "OptionalFeature.h"
 #include "WslInstall.h"
 
+using wsl::windows::common::optionalfeature::DependencyBehavior;
 using wsl::windows::common::optionalfeature::State;
 using wsl::windows::common::optionalfeature::details::DismFeatureState;
 using wsl::windows::common::optionalfeature::details::MapDismFeatureState;
@@ -103,5 +104,63 @@ class OptionalFeatureTests
         });
 
         VERIFY_ARE_EQUAL(E_ACCESSDENIED, result);
+    }
+
+    TEST_METHOD(EnableOptionalComponentWithDependencies)
+    {
+        bool invoked{};
+        const auto result = WslInstall::InstallOptionalComponent(
+            WslInstall::c_optionalFeatureNameVmp, [&](std::wstring_view featureName, DependencyBehavior dependencyBehavior) {
+                invoked = true;
+                VERIFY_IS_TRUE(featureName == WslInstall::c_optionalFeatureNameVmp);
+                VERIFY_IS_TRUE(dependencyBehavior == DependencyBehavior::All);
+                return ERROR_SUCCESS;
+            });
+
+        VERIFY_IS_TRUE(invoked);
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(ERROR_SUCCESS), result);
+    }
+
+    TEST_METHOD(PreserveOptionalComponentRebootResult)
+    {
+        const auto result =
+            WslInstall::InstallOptionalComponent(WslInstall::c_optionalFeatureNameVmp, [](std::wstring_view, DependencyBehavior) {
+                return ERROR_SUCCESS_REBOOT_REQUIRED;
+            });
+
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(ERROR_SUCCESS_REBOOT_REQUIRED), result);
+    }
+
+    TEST_METHOD(PropagateOptionalComponentEnableFailure)
+    {
+        constexpr auto nativeFailure = static_cast<DWORD>(E_ACCESSDENIED);
+        const auto enableFeature = [](std::wstring_view, DependencyBehavior) { return nativeFailure; };
+
+        VERIFY_ARE_EQUAL(nativeFailure, WslInstall::InstallOptionalComponent(WslInstall::c_optionalFeatureNameVmp, enableFeature));
+
+        const auto result = wil::ResultFromException(
+            [&]() { WslInstall::InstallOptionalComponents({WslInstall::c_optionalFeatureNameVmp}, enableFeature); });
+
+        VERIFY_ARE_EQUAL(WSL_E_INSTALL_COMPONENT_FAILED, result);
+    }
+
+    TEST_METHOD(SequenceOptionalComponentEnables)
+    {
+        const std::vector<std::wstring> components{WslInstall::c_optionalFeatureNameWsl, WslInstall::c_optionalFeatureNameVmp};
+        std::vector<std::wstring> enabledComponents;
+        std::vector<DependencyBehavior> dependencyBehaviors;
+
+        WslInstall::InstallOptionalComponents(components, [&](std::wstring_view featureName, DependencyBehavior dependencyBehavior) {
+            enabledComponents.emplace_back(featureName);
+            dependencyBehaviors.emplace_back(dependencyBehavior);
+            return enabledComponents.size() == 1 ? ERROR_SUCCESS_REBOOT_REQUIRED : ERROR_SUCCESS;
+        });
+
+        VERIFY_ARE_EQUAL(components.size(), enabledComponents.size());
+        VERIFY_IS_TRUE(components == enabledComponents);
+        VERIFY_ARE_EQUAL(components.size(), dependencyBehaviors.size());
+        VERIFY_IS_TRUE(std::ranges::all_of(dependencyBehaviors, [](DependencyBehavior dependencyBehavior) {
+            return dependencyBehavior == DependencyBehavior::All;
+        }));
     }
 };

@@ -53,6 +53,8 @@ public:
     };
 
     using OptionalFeatureStateQuery = std::function<wsl::windows::common::optionalfeature::State(std::wstring_view featureName)>;
+    using OptionalFeatureEnable =
+        std::function<DWORD(std::wstring_view featureName, wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior)>;
 
     static OptionalComponentRequirements CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent);
 
@@ -63,7 +65,11 @@ public:
 
     static void InstallOptionalComponents(const std::vector<std::wstring>& components);
 
-    static DWORD InstallOptionalComponent(LPCWSTR component, bool consoleOutput);
+    static void InstallOptionalComponents(const std::vector<std::wstring>& components, const OptionalFeatureEnable& enableFeature);
+
+    static DWORD InstallOptionalComponent(std::wstring_view component);
+
+    static DWORD InstallOptionalComponent(std::wstring_view component, const OptionalFeatureEnable& enableFeature);
 
     static std::pair<std::wstring, GUID> InstallModernDistribution(
         const wsl::windows::common::distribution::ModernDistributionVersion& distribution,

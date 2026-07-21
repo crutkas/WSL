@@ -1691,7 +1691,7 @@ try
             progressCallback(WSLC_COMPONENT_FLAG_VIRTUAL_MACHINE_PLATFORM, 0, 1, context);
         }
 
-        auto exitCode = WslInstall::InstallOptionalComponent(WslInstall::c_optionalFeatureNameVmp, false);
+        auto exitCode = WslInstall::InstallOptionalComponent(WslInstall::c_optionalFeatureNameVmp);
         if (exitCode == ERROR_SUCCESS_REBOOT_REQUIRED)
         {
             result = HRESULT_FROM_WIN32(ERROR_SUCCESS_REBOOT_REQUIRED);

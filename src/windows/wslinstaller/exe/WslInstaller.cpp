@@ -223,8 +223,8 @@ try
 {
     THROW_HR_IF(E_INVALIDARG, FeatureName == nullptr || State == nullptr);
 
-    wsl::windows::common::optionalfeature::Query query;
-    *State = static_cast<UINT>(query.GetState(FeatureName));
+    wsl::windows::common::optionalfeature::Session session;
+    *State = static_cast<UINT>(session.GetState(FeatureName));
     return S_OK;
 }
 CATCH_RETURN()
