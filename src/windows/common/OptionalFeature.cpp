@@ -31,6 +31,11 @@ struct DismFeatureInfo
 };
 #pragma pack(pop)
 
+struct DismProgressContext
+{
+    const wsl::windows::common::optionalfeature::ProgressObserver& Observer;
+};
+
 using DismInitializeFunction = HRESULT WINAPI(DismLogLevel, PCWSTR, PCWSTR);
 using DismShutdownFunction = HRESULT WINAPI();
 using DismOpenSessionFunction = HRESULT WINAPI(PCWSTR, PCWSTR, PCWSTR, DismSession*);
@@ -46,6 +51,15 @@ wil::shared_hmodule LoadDismApi()
     wil::shared_hmodule module{LoadLibraryExW(L"dismapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)};
     THROW_LAST_ERROR_IF(!module);
     return module;
+}
+
+void CALLBACK DismProgressCallbackImpl(UINT current, UINT total, PVOID userData) noexcept
+{
+    const auto* context = static_cast<const DismProgressContext*>(userData);
+    if (context != nullptr)
+    {
+        wsl::windows::common::optionalfeature::details::InvokeProgressObserver(context->Observer, current, total);
+    }
 }
 } // namespace
 
@@ -71,6 +85,39 @@ State details::MapDismFeatureState(DismFeatureState state)
     default:
         THROW_HR_MSG(E_UNEXPECTED, "Unexpected DISM feature state: %u", static_cast<unsigned int>(state));
     }
+}
+
+void details::InvokeProgressObserver(const ProgressObserver& observer, unsigned int current, unsigned int total) noexcept
+try
+{
+    if (observer)
+    {
+        observer(current, total);
+    }
+}
+CATCH_LOG()
+
+details::ThrottledProgressObserver::ThrottledProgressObserver(ProgressObserver observer) : m_observer{std::move(observer)}
+{
+    THROW_HR_IF(E_INVALIDARG, !m_observer);
+}
+
+void details::ThrottledProgressObserver::Report(unsigned int current, unsigned int total)
+{
+    const auto boundedCurrent = std::min(current, total);
+    const auto bucket = total == 0 ? 0 : static_cast<unsigned int>((static_cast<uint64_t>(boundedCurrent) * c_progressBuckets) / total);
+    const bool progressRestarted = m_hasReported && (current < m_previousCurrent);
+    const bool shouldReport = !m_hasReported || (total != m_previousTotal) || progressRestarted || (total != 0 && bucket > m_previousBucket);
+    if (!shouldReport)
+    {
+        return;
+    }
+
+    m_previousCurrent = current;
+    m_previousTotal = total;
+    m_previousBucket = bucket;
+    m_hasReported = true;
+    m_observer(current, total);
 }
 
 class Session::Impl
@@ -121,12 +168,13 @@ public:
         return details::MapDismFeatureState(featureInfo->FeatureState);
     }
 
-    DWORD Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior)
+    DWORD Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior, const ProgressObserver& progressObserver)
     {
         THROW_HR_IF(E_INVALIDARG, featureName.empty());
         THROW_HR_IF(E_INVALIDARG, dependencyBehavior != DependencyBehavior::FeatureOnly && dependencyBehavior != DependencyBehavior::All);
 
         const std::wstring nullTerminatedName{featureName};
+        DismProgressContext progressContext{progressObserver};
         const auto result = m_enableFeature(
             m_session,
             nullTerminatedName.c_str(),
@@ -137,8 +185,8 @@ public:
             0,
             dependencyBehavior == DependencyBehavior::All ? TRUE : FALSE,
             nullptr,
-            nullptr,
-            nullptr);
+            progressObserver ? DismProgressCallbackImpl : nullptr,
+            progressObserver ? &progressContext : nullptr);
 
         if (result == c_dismReloadImageSessionRequired)
         {
@@ -181,8 +229,8 @@ State Session::GetState(std::wstring_view featureName)
     return m_impl->GetState(featureName);
 }
 
-DWORD Session::Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior)
+DWORD Session::Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior, const ProgressObserver& progressObserver)
 {
-    return m_impl->Enable(featureName, dependencyBehavior);
+    return m_impl->Enable(featureName, dependencyBehavior, progressObserver);
 }
 } // namespace wsl::windows::common::optionalfeature

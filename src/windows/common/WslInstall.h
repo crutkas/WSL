@@ -52,9 +52,17 @@ public:
         std::vector<std::wstring> ComponentsToEnable;
     };
 
+    enum class OptionalComponentFailure
+    {
+        Unknown,
+        ServicingPending,
+        SourceUnavailable,
+        ComponentStoreCorruption
+    };
+
     using OptionalFeatureStateQuery = std::function<wsl::windows::common::optionalfeature::State(std::wstring_view featureName)>;
-    using OptionalFeatureEnable =
-        std::function<DWORD(std::wstring_view featureName, wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior)>;
+    using OptionalFeatureEnable = std::function<DWORD(
+        std::wstring_view featureName, wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior, const wsl::windows::common::optionalfeature::ProgressObserver& progressObserver)>;
 
     static OptionalComponentRequirements CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent);
 
@@ -70,6 +78,10 @@ public:
     static DWORD InstallOptionalComponent(std::wstring_view component);
 
     static DWORD InstallOptionalComponent(std::wstring_view component, const OptionalFeatureEnable& enableFeature);
+
+    static OptionalComponentFailure ClassifyOptionalComponentFailure(DWORD error);
+
+    static std::wstring BuildOptionalComponentFailureMessage(std::wstring_view component, DWORD error, std::wstring_view windowsDirectory);
 
     static std::pair<std::wstring, GUID> InstallModernDistribution(
         const wsl::windows::common::distribution::ModernDistributionVersion& distribution,

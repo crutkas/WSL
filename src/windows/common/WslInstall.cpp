@@ -15,6 +15,7 @@ Abstract:
 #include "precomp.h"
 #include "WslInstall.h"
 #include "wslutil.h"
+#include "ConsoleProgressBar.h"
 #include "Distribution.h"
 #include "HandleConsoleProgressBar.h"
 #include "svccomm.hpp"
@@ -26,6 +27,14 @@ using namespace wsl::windows::common::distribution;
 using namespace wsl::windows::common::wslutil;
 
 namespace {
+constexpr DWORD c_cbsPending = 0x800F0806;
+constexpr DWORD c_cbsSourceMissing = 0x800F081F;
+constexpr DWORD c_cbsStoreCorruption = 0x800F0831;
+constexpr DWORD c_cbsBusy = 0x800F0902;
+constexpr DWORD c_cbsDownloadFailure = 0x800F0906;
+constexpr DWORD c_cbsGroupPolicyDisallowed = 0x800F0907;
+constexpr DWORD c_cbsInvalidWindowsUpdateCountWsus = 0x800F0954;
+
 void EnforceFileHash(HANDLE file, const std::wstring& expectedHash)
 {
     wsl::windows::common::ExecutionContext context(wsl::windows::common::VerifyChecksum);
@@ -219,8 +228,11 @@ DWORD WslInstall::InstallOptionalComponent(std::wstring_view component)
 {
     wsl::windows::common::optionalfeature::Session session;
     return InstallOptionalComponent(
-        component, [&](std::wstring_view featureName, wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior) {
-            return session.Enable(featureName, dependencyBehavior);
+        component,
+        [&](std::wstring_view featureName,
+            wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior,
+            const wsl::windows::common::optionalfeature::ProgressObserver& progressObserver) {
+            return session.Enable(featureName, dependencyBehavior, progressObserver);
         });
 }
 
@@ -232,9 +244,13 @@ void WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& comp
     }
 
     wsl::windows::common::optionalfeature::Session session;
-    InstallOptionalComponents(components, [&](std::wstring_view featureName, wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior) {
-        return session.Enable(featureName, dependencyBehavior);
-    });
+    InstallOptionalComponents(
+        components,
+        [&](std::wstring_view featureName,
+            wsl::windows::common::optionalfeature::DependencyBehavior dependencyBehavior,
+            const wsl::windows::common::optionalfeature::ProgressObserver& progressObserver) {
+            return session.Enable(featureName, dependencyBehavior, progressObserver);
+        });
 }
 
 void WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& components, const OptionalFeatureEnable& enableFeature)
@@ -245,10 +261,20 @@ void WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& comp
     {
         wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstallingWindowsComponent(component));
 
-        const auto exitCode = InstallOptionalComponent(component, enableFeature);
+        wsl::windows::common::ConsoleProgressBar progressBar;
+        auto clearProgress = wil::scope_exit([&]() { LOG_IF_FAILED(progressBar.Clear()); });
+        wsl::windows::common::optionalfeature::details::ThrottledProgressObserver progressObserver{
+            [&](unsigned int current, unsigned int total) { THROW_IF_FAILED(progressBar.Print(current, total)); }};
+
+        const auto exitCode =
+            enableFeature(component, wsl::windows::common::optionalfeature::DependencyBehavior::All, [&](auto current, auto total) {
+                progressObserver.Report(current, total);
+            });
         if (exitCode != 0 && exitCode != ERROR_SUCCESS_REBOOT_REQUIRED)
         {
-            THROW_HR_WITH_USER_ERROR(WSL_E_INSTALL_COMPONENT_FAILED, Localization::MessageOptionalComponentInstallFailed(component, exitCode));
+            THROW_HR_WITH_USER_ERROR(
+                WSL_E_INSTALL_COMPONENT_FAILED,
+                BuildOptionalComponentFailureMessage(component, exitCode, wil::GetWindowsDirectoryW<std::wstring>()));
         }
     }
 }
@@ -256,7 +282,60 @@ void WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& comp
 DWORD WslInstall::InstallOptionalComponent(std::wstring_view component, const OptionalFeatureEnable& enableFeature)
 {
     THROW_HR_IF(E_INVALIDARG, component.empty() || !enableFeature);
-    return enableFeature(component, wsl::windows::common::optionalfeature::DependencyBehavior::All);
+    return enableFeature(component, wsl::windows::common::optionalfeature::DependencyBehavior::All, {});
+}
+
+WslInstall::OptionalComponentFailure WslInstall::ClassifyOptionalComponentFailure(DWORD error)
+{
+    switch (error)
+    {
+    case c_cbsPending:
+    case c_cbsBusy:
+        return OptionalComponentFailure::ServicingPending;
+
+    case c_cbsSourceMissing:
+    case c_cbsDownloadFailure:
+    case c_cbsGroupPolicyDisallowed:
+    case c_cbsInvalidWindowsUpdateCountWsus:
+        return OptionalComponentFailure::SourceUnavailable;
+
+    case c_cbsStoreCorruption:
+    case static_cast<DWORD>(HRESULT_FROM_WIN32(ERROR_SXS_COMPONENT_STORE_CORRUPT)):
+        return OptionalComponentFailure::ComponentStoreCorruption;
+
+    default:
+        return OptionalComponentFailure::Unknown;
+    }
+}
+
+std::wstring WslInstall::BuildOptionalComponentFailureMessage(std::wstring_view component, DWORD error, std::wstring_view windowsDirectory)
+{
+    THROW_HR_IF(E_INVALIDARG, component.empty() || windowsDirectory.empty());
+
+    auto message = Localization::MessageOptionalComponentInstallFailed(component, std::format(L"0x{:08X}", error));
+    switch (ClassifyOptionalComponentFailure(error))
+    {
+    case OptionalComponentFailure::ServicingPending:
+        message += L'\n' + Localization::MessageOptionalComponentServicingPending();
+        break;
+
+    case OptionalComponentFailure::SourceUnavailable:
+        message += L'\n' + Localization::MessageOptionalComponentSourceUnavailable();
+        break;
+
+    case OptionalComponentFailure::ComponentStoreCorruption:
+        message += L'\n' + Localization::MessageOptionalComponentStoreCorruption();
+        break;
+
+    case OptionalComponentFailure::Unknown:
+        break;
+    }
+
+    const std::filesystem::path windowsPath{windowsDirectory};
+    message += L'\n' + Localization::MessageOptionalComponentServicingLogs(
+                           (windowsPath / L"Logs" / L"DISM" / L"dism.log").wstring(),
+                           (windowsPath / L"Logs" / L"CBS" / L"CBS.log").wstring());
+    return message;
 }
 
 std::pair<std::wstring, GUID> WslInstall::InstallModernDistribution(

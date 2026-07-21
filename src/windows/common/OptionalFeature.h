@@ -2,12 +2,15 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string_view>
 
 #include "defs.h"
 
 namespace wsl::windows::common::optionalfeature {
+using ProgressObserver = std::function<void(unsigned int current, unsigned int total)>;
+
 enum class State
 {
     Disabled = 0,
@@ -36,6 +39,25 @@ namespace details {
     };
 
     State MapDismFeatureState(DismFeatureState state);
+
+    void InvokeProgressObserver(const ProgressObserver& observer, unsigned int current, unsigned int total) noexcept;
+
+    class ThrottledProgressObserver
+    {
+    public:
+        explicit ThrottledProgressObserver(ProgressObserver observer);
+
+        void Report(unsigned int current, unsigned int total);
+
+    private:
+        static constexpr unsigned int c_progressBuckets = 20;
+
+        ProgressObserver m_observer;
+        unsigned int m_previousCurrent{};
+        unsigned int m_previousTotal{};
+        unsigned int m_previousBucket{};
+        bool m_hasReported{};
+    };
 } // namespace details
 
 class Session
@@ -48,7 +70,7 @@ public:
     NON_MOVABLE(Session);
 
     State GetState(std::wstring_view featureName);
-    DWORD Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior);
+    DWORD Enable(std::wstring_view featureName, DependencyBehavior dependencyBehavior, const ProgressObserver& progressObserver = {});
 
 private:
     class Impl;

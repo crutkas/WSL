@@ -965,6 +965,21 @@ Falling back to NAT networking.</value>
     <value>Failed to enable Windows component '{}' (exit code {})</value>
     <comment>{FixedPlaceholder="{}"}Command line arguments, file names and string inserts should not be translated</comment>
   </data>
+  <data name="MessageOptionalComponentServicingPending" xml:space="preserve">
+    <value>Complete any pending Windows updates, restart Windows, then run 'wsl.exe --install' again.</value>
+    <comment>{Locked="--install'"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
+  <data name="MessageOptionalComponentSourceUnavailable" xml:space="preserve">
+    <value>Windows could not find or download the required files. Check Windows Update access and optional component source policy, then try again.</value>
+  </data>
+  <data name="MessageOptionalComponentStoreCorruption" xml:space="preserve">
+    <value>The Windows component store is corrupted. Run 'DISM.exe /Online /Cleanup-Image /RestoreHealth' in an elevated terminal, then try again.</value>
+    <comment>{Locked="DISM.exe /Online /Cleanup-Image /RestoreHealth"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
+  <data name="MessageOptionalComponentServicingLogs" xml:space="preserve">
+    <value>For details, see '{}' and '{}'.</value>
+    <comment>{FixedPlaceholder="{}"}Command line arguments, file names and string inserts should not be translated</comment>
+  </data>
   <data name="MessageFatalPluginError" xml:space="preserve">
     <value>A fatal error was returned by plugin '{}'</value>
     <comment>{FixedPlaceholder="{}"}Command line arguments, file names and string inserts should not be translated</comment>
