@@ -153,7 +153,6 @@ public:
     virtual std::optional<RawRegistryValue> ReadTrigger() const = 0;
     virtual void Arm(std::wstring_view state, std::wstring_view trigger) = 0;
     virtual void WriteState(std::wstring_view value) = 0;
-    virtual void WriteTrigger(std::wstring_view value) = 0;
     virtual void DeleteState() = 0;
     virtual void DeleteTrigger() = 0;
     virtual void QuarantineState(std::wstring_view reason) = 0;
@@ -168,7 +167,6 @@ public:
     std::optional<RawRegistryValue> ReadTrigger() const override;
     void Arm(std::wstring_view state, std::wstring_view trigger) override;
     void WriteState(std::wstring_view value) override;
-    void WriteTrigger(std::wstring_view value) override;
     void DeleteState() override;
     void DeleteTrigger() override;
     void QuarantineState(std::wstring_view reason) override;

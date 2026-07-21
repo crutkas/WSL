@@ -865,6 +865,7 @@ void wsl::windows::common::installresume::RegistryStore::Arm(std::wstring_view s
 {
     wil::unique_hfile transaction{CreateTransaction(nullptr, nullptr, TRANSACTION_DO_NOT_PROMOTE, 0, 0, 0, nullptr)};
     THROW_LAST_ERROR_IF(!transaction);
+    auto rollback = wil::scope_exit([&]() { LOG_LAST_ERROR_IF(!RollbackTransaction(transaction.get())); });
 
     const auto resumeKey = CreateTransactedRegistryKey(
         m_currentUserKey.get(), std::format(L"{}\\{}", LXSS_REGISTRY_PATH, c_resumeKeyName), transaction.get());
@@ -872,16 +873,12 @@ void wsl::windows::common::installresume::RegistryStore::Arm(std::wstring_view s
     WriteRegistryString(resumeKey.get(), c_stateValueName, state, c_maxStateCharacters);
     WriteRegistryString(runKey.get(), c_triggerValueName, trigger, c_maxRunCommandCharacters);
     THROW_IF_WIN32_BOOL_FALSE(CommitTransaction(transaction.get()));
+    rollback.release();
 }
 
 void wsl::windows::common::installresume::RegistryStore::WriteState(std::wstring_view value)
 {
     WriteRegistryString(m_resumeKey.get(), c_stateValueName, value, c_maxStateCharacters);
-}
-
-void wsl::windows::common::installresume::RegistryStore::WriteTrigger(std::wstring_view value)
-{
-    WriteRegistryString(m_runKey.get(), c_triggerValueName, value, c_maxRunCommandCharacters);
 }
 
 void wsl::windows::common::installresume::RegistryStore::DeleteState()
