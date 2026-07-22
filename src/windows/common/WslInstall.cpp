@@ -217,7 +217,7 @@ DWORD WslInstall::InstallOptionalComponent(LPCWSTR component, bool consoleOutput
 
     const auto dismPath = std::filesystem::path(std::move(systemDirectory)) / L"dism.exe";
 
-    auto commandLine = std::format(L"{} /Online /NoRestart /enable-feature /featurename:{}", dismPath.native(), component);
+    auto commandLine = std::format(L"{} /Online /NoRestart /enable-feature /featurename:{} /All", dismPath.native(), component);
 
     wsl::windows::common::SubProcess process(nullptr, commandLine.c_str());
     if (!consoleOutput)
