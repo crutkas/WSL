@@ -21,14 +21,6 @@ cpp_quote("const GUID CLSID_WslInstaller = { 0xb5aeb4c3, 0x9541, 0x492f, { 0xad,
 cpp_quote("class DECLSPEC_UUID(\"B5AEB4C3-9541-492F-AD4D-505951F6ADA4\") WslInstaller;")
 cpp_quote("#endif")
 
-typedef enum _WSL_OPTIONAL_FEATURE_STATE
-{
-    WslOptionalFeatureDisabled = 0,
-    WslOptionalFeatureDisablePending,
-    WslOptionalFeatureEnabled,
-    WslOptionalFeatureEnablePending
-} WSL_OPTIONAL_FEATURE_STATE;
-
 [
     uuid(1E912664-C599-474A-A552-DAEAF73B3164),
     pointer_default(unique),
@@ -37,7 +29,4 @@ typedef enum _WSL_OPTIONAL_FEATURE_STATE
 interface IWslInstaller : IUnknown
 {
     HRESULT Install([out] UINT* ExitCode, [out] LPWSTR* ErrorMessage);
-    HRESULT GetOptionalFeatureStates(
-        [out] WSL_OPTIONAL_FEATURE_STATE* WslState,
-        [out] WSL_OPTIONAL_FEATURE_STATE* VirtualMachinePlatformState);
 };

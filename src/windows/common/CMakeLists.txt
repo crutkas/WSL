@@ -28,7 +28,6 @@ set(SOURCES
     LxssServerPort.cpp
     NatNetworking.cpp
     notifications.cpp
-    OptionalFeature.cpp
     Redirector.cpp
     registry.cpp
     relay.cpp
@@ -114,7 +113,6 @@ set(HEADERS
     LxssServerPort.h
     NatNetworking.h
     notifications.h
-    OptionalFeature.h
     precomp.h
     Redirector.h
     registry.hpp
@@ -153,18 +151,7 @@ add_dependencies(common wslserviceidl wsldevicehostidl localization wslservicemc
 
 target_precompile_headers(common PRIVATE precomp.h)
 set_target_properties(common PROPERTIES FOLDER windows)
-set(
-    DISM_SDK_ROOT
-    "$ENV{ProgramFiles\(x86\)}/Windows Kits/10/Assessment and Deployment Kit/Deployment Tools/SDKs/DismApi"
-    CACHE PATH "Path to the Windows ADK DISM API SDK")
-find_path(DISM_INCLUDE_DIR DismApi.h PATHS "${DISM_SDK_ROOT}/Include" REQUIRED NO_DEFAULT_PATH)
-set(DISM_LIBRARY_ARCH "${TARGET_PLATFORM}")
-if(${TARGET_PLATFORM} STREQUAL "x64")
-    set(DISM_LIBRARY_ARCH "amd64")
-endif()
-find_library(DISM_LIBRARY DismApi PATHS "${DISM_SDK_ROOT}/Lib/${DISM_LIBRARY_ARCH}" REQUIRED NO_DEFAULT_PATH)
-target_include_directories(common PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/../service/mc/${TARGET_PLATFORM}/${CMAKE_BUILD_TYPE} ${DISM_INCLUDE_DIR})
-target_link_libraries(common PUBLIC ${DISM_LIBRARY})
+target_include_directories(common PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/../service/mc/${TARGET_PLATFORM}/${CMAKE_BUILD_TYPE})
 
 # WSLCUserSettings.cpp uses yaml-cpp headers.
 set_source_files_properties(WSLCUserSettings.cpp PROPERTIES

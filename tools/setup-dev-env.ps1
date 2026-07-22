@@ -2,10 +2,10 @@
 .SYNOPSIS
     Sets up the development environment for building WSL.
 .DESCRIPTION
-    Installs the Windows ADK Deployment Tools, detects any existing Visual
-    Studio 2022 installation, and runs the matching WinGet Configuration
-    to install Developer Mode, CMake, Visual Studio 2022, and the required
-    workloads from .vsconfig.
+    Detects any existing Visual Studio 2022 installation and runs the
+    matching WinGet Configuration to install all prerequisites:
+    Developer Mode, CMake, Visual Studio 2022, and required workloads
+    from .vsconfig.
 
     If VS 2022 is already installed, the script picks the configuration
     matching that edition (Community, Professional, or Enterprise).
@@ -62,24 +62,10 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf))
     exit 1
 }
 
-# ── Install Windows ADK Deployment Tools ────────────────────────────
-$dismApiHeader = "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\SDKs\DismApi\Include\DismApi.h"
-if (-not (Test-Path -LiteralPath $dismApiHeader -PathType Leaf))
-{
-    Write-Host "Installing Windows ADK Deployment Tools..." -ForegroundColor Cyan
-    winget install --id Microsoft.WindowsADK --exact --silent --accept-package-agreements --accept-source-agreements --force `
-        --override "/quiet /norestart /features OptionId.DeploymentTools /ceip off"
-    if ($LASTEXITCODE -ne 0)
-    {
-        Write-Host "Failed to install Windows ADK Deployment Tools." -ForegroundColor Red
-        exit 1
-    }
-}
-
 # ── Run WinGet Configuration ────────────────────────────────────────
 Write-Host ""
 Write-Host "Running WinGet Configuration ($configFile)..." -ForegroundColor Cyan
-Write-Host "  This will install: Developer Mode, CMake, Windows ADK, VS 2022 + required components"
+Write-Host "  This will install: Developer Mode, CMake, VS 2022 + required components"
 Write-Host ""
 
 winget configure --enable

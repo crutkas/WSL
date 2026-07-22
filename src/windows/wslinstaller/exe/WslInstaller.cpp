@@ -15,7 +15,6 @@ Abstract:
 #include "precomp.h"
 #include "install.h"
 #include "WslInstaller.h"
-#include "WslInstall.h"
 
 extern wil::unique_event g_stopEvent;
 
@@ -215,20 +214,5 @@ try
     *Errors = wil::make_unique_string<wil::unique_cotaskmem_string>(context->Errors.c_str()).release();
 
     return context->Result;
-}
-CATCH_RETURN()
-
-HRESULT WslInstaller::GetOptionalFeatureStates(WSL_OPTIONAL_FEATURE_STATE* WslState, WSL_OPTIONAL_FEATURE_STATE* VirtualMachinePlatformState)
-try
-{
-    THROW_HR_IF(E_INVALIDARG, WslState == nullptr || VirtualMachinePlatformState == nullptr);
-
-    using wsl::windows::common::optionalfeature::State;
-    static_assert(static_cast<unsigned int>(State::EnablePending) == WslOptionalFeatureEnablePending);
-
-    wsl::windows::common::optionalfeature::Session session;
-    *WslState = static_cast<WSL_OPTIONAL_FEATURE_STATE>(session.GetState(WslInstall::c_optionalFeatureNameWsl));
-    *VirtualMachinePlatformState = static_cast<WSL_OPTIONAL_FEATURE_STATE>(session.GetState(WslInstall::c_optionalFeatureNameVmp));
-    return S_OK;
 }
 CATCH_RETURN()
