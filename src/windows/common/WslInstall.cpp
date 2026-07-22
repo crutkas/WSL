@@ -14,15 +14,13 @@ Abstract:
 
 #include "precomp.h"
 #include "WslInstall.h"
-#include "registry.hpp"
+#include "wslinstallerservice.h"
 #include "wslutil.h"
 #include "Distribution.h"
 #include "HandleConsoleProgressBar.h"
 #include "svccomm.hpp"
 
 extern HINSTANCE g_dllInstance;
-
-constexpr LPCWSTR c_optionalFeatureInstallStatus = L"InstallStatus";
 
 using wsl::shared::Localization;
 using namespace wsl::windows::common::distribution;
@@ -45,19 +43,27 @@ void EnforceFileHash(HANDLE file, const std::wstring& expectedHash)
     }
 }
 
-std::vector<std::wstring> GetInstalledOptionalComponents()
+void AddOptionalComponentRequirement(
+    WslInstall::OptionalComponentRequirements& requirements, std::wstring_view component, wsl::windows::common::optionalfeature::State state)
 {
-    // Query the list of optional components that have already been installed.
-    const auto lxssKey = wsl::windows::common::registry::OpenLxssUserKey();
-    auto [key, error] = wsl::windows::common::registry::OpenKeyNoThrow(lxssKey.get(), c_optionalFeatureInstallStatus, KEY_READ);
-    std::vector<std::wstring> installedComponents;
-    if (key)
+    switch (state)
     {
-        const auto components = wsl::windows::common::registry::ReadString(key.get(), nullptr, nullptr, L"");
-        installedComponents = wsl::shared::string::Split(components, L',');
-    }
+    case wsl::windows::common::optionalfeature::State::Enabled:
+        return;
 
-    return installedComponents;
+    case wsl::windows::common::optionalfeature::State::EnablePending:
+    case wsl::windows::common::optionalfeature::State::DisablePending:
+        requirements.RebootRequired = true;
+        return;
+
+    case wsl::windows::common::optionalfeature::State::Disabled:
+        requirements.RebootRequired = true;
+        requirements.ComponentsToEnable.emplace_back(component);
+        return;
+
+    default:
+        THROW_HR(E_UNEXPECTED);
+    }
 }
 
 }; // namespace
@@ -182,73 +188,81 @@ try
 }
 CATCH_RETURN()
 
-std::pair<bool, std::vector<std::wstring>> WslInstall::CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent)
+WslInstall::OptionalComponentRequirements WslInstall::CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent)
 {
-    // Include the WSL optional component if it was requested, or if the OS is not Windows 11 or later.
-    std::vector<std::wstring> missingComponents;
+    using wsl::windows::common::optionalfeature::State;
+
+    State wslState{};
+    State virtualMachinePlatformState{};
+    const auto token = wil::open_current_access_token();
+    if (wsl::windows::common::security::IsTokenElevated(token.get()) || wsl::windows::common::security::IsTokenLocalSystem(token.get()))
+    {
+        wsl::windows::common::optionalfeature::Session session;
+        wslState = session.GetState(c_optionalFeatureNameWsl);
+        virtualMachinePlatformState = session.GetState(c_optionalFeatureNameVmp);
+    }
+    else
+    {
+        const auto installer = wil::CoCreateInstance<IWslInstaller>(__uuidof(WslInstaller), CLSCTX_LOCAL_SERVER);
+        WSL_OPTIONAL_FEATURE_STATE rawWslState{};
+        WSL_OPTIONAL_FEATURE_STATE rawVirtualMachinePlatformState{};
+        THROW_IF_FAILED(installer->GetOptionalFeatureStates(&rawWslState, &rawVirtualMachinePlatformState));
+
+        const auto convertState = [](WSL_OPTIONAL_FEATURE_STATE state) {
+            THROW_HR_IF(E_UNEXPECTED, static_cast<unsigned int>(state) > static_cast<unsigned int>(State::EnablePending));
+            return static_cast<State>(state);
+        };
+        wslState = convertState(rawWslState);
+        virtualMachinePlatformState = convertState(rawVirtualMachinePlatformState);
+    }
+
     requireWslOptionalComponent |= !wsl::windows::common::helpers::IsWindows11OrAbove();
-    if (requireWslOptionalComponent && !wsl::windows::common::helpers::IsServicePresent(L"lxssmanager"))
-    {
-        missingComponents.emplace_back(c_optionalFeatureNameWsl);
-    }
-
-    if (!wsl::windows::common::wslutil::IsVirtualMachinePlatformInstalled())
-    {
-        missingComponents.emplace_back(c_optionalFeatureNameVmp);
-    }
-
-    // If any required components are not present, a reboot is required.
-    bool rebootRequired = !missingComponents.empty();
-
-    // Query the list of optional components that have already been installed.
-    const auto installedComponents = GetInstalledOptionalComponents();
-    for (const auto& component : installedComponents)
-    {
-        std::erase(missingComponents, component);
-    }
-
-    return {rebootRequired, std::move(missingComponents)};
+    return EvaluateOptionalComponentRequirements(requireWslOptionalComponent, wslState, virtualMachinePlatformState);
 }
 
-DWORD WslInstall::InstallOptionalComponent(LPCWSTR component, bool consoleOutput)
+WslInstall::OptionalComponentRequirements WslInstall::EvaluateOptionalComponentRequirements(
+    _In_ bool requireWslOptionalComponent,
+    _In_ wsl::windows::common::optionalfeature::State wslState,
+    _In_ wsl::windows::common::optionalfeature::State virtualMachinePlatformState)
 {
-    std::wstring systemDirectory;
-    THROW_IF_FAILED(wil::GetSystemDirectoryW(systemDirectory));
-
-    const auto dismPath = std::filesystem::path(std::move(systemDirectory)) / L"dism.exe";
-
-    auto commandLine = std::format(L"{} /Online /NoRestart /enable-feature /featurename:{}", dismPath.native(), component);
-
-    wsl::windows::common::SubProcess process(nullptr, commandLine.c_str());
-    if (!consoleOutput)
+    OptionalComponentRequirements requirements;
+    if (requireWslOptionalComponent)
     {
-        process.SetFlags(CREATE_NEW_CONSOLE);
-        process.SetShowWindow(SW_HIDE);
+        AddOptionalComponentRequirement(requirements, c_optionalFeatureNameWsl, wslState);
     }
 
-    return process.Run();
+    AddOptionalComponentRequirement(requirements, c_optionalFeatureNameVmp, virtualMachinePlatformState);
+    return requirements;
 }
 
-void WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& components)
+bool WslInstall::InstallOptionalComponents(const std::vector<std::wstring>& components, bool consoleOutput)
 {
+    if (components.empty())
+    {
+        return false;
+    }
+
+    bool rebootRequired{};
+    wsl::windows::common::optionalfeature::Session session;
     for (const auto& component : components)
     {
-        wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstallingWindowsComponent(component));
-
-        const auto exitCode = InstallOptionalComponent(component.c_str(), true);
-        if (exitCode != 0 && exitCode != ERROR_SUCCESS_REBOOT_REQUIRED)
+        if (consoleOutput)
         {
-            THROW_HR_WITH_USER_ERROR(WSL_E_INSTALL_COMPONENT_FAILED, Localization::MessageOptionalComponentInstallFailed(component, exitCode));
+            wsl::windows::common::wslutil::PrintMessage(Localization::MessageInstallingWindowsComponent(component));
+        }
+
+        try
+        {
+            rebootRequired |= session.Enable(component.c_str());
+        }
+        catch (...)
+        {
+            const auto result = wil::ResultFromCaughtException();
+            THROW_HR_WITH_USER_ERROR(result, Localization::MessageOptionalComponentInstallFailed(component, static_cast<DWORD>(result)));
         }
     }
 
-    // Update the list of optional components that have been installed.
-    auto installedComponents = GetInstalledOptionalComponents();
-    installedComponents.insert(installedComponents.end(), components.begin(), components.end());
-    const auto lxssKey = wsl::windows::common::registry::OpenLxssUserKey();
-    const auto key =
-        wsl::windows::common::registry::CreateKey(lxssKey.get(), c_optionalFeatureInstallStatus, KEY_ALL_ACCESS, nullptr, REG_OPTION_VOLATILE);
-    wsl::windows::common::registry::WriteString(key.get(), nullptr, nullptr, wsl::shared::string::Join(installedComponents, L',').c_str());
+    return rebootRequired;
 }
 
 std::pair<std::wstring, GUID> WslInstall::InstallModernDistribution(

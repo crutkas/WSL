@@ -8,11 +8,12 @@ All prerequisites can be installed automatically by running:
 tools\setup-dev-env.ps1
 ```
 
-This uses [WinGet Configuration](https://learn.microsoft.com/windows/package-manager/configuration/) to install Developer Mode, CMake, Visual Studio 2022, and the required workloads from [`.vsconfig`](https://github.com/microsoft/WSL/blob/master/.vsconfig). If VS 2022 is already installed, the script detects your edition (Community, Professional, or Enterprise) and uses the matching configuration. If no VS 2022 is found, it defaults to Community.
+This installs the Windows ADK Deployment Tools, then uses [WinGet Configuration](https://learn.microsoft.com/windows/package-manager/configuration/) to install Developer Mode, CMake, Visual Studio 2022, and the required workloads from [`.vsconfig`](https://github.com/microsoft/WSL/blob/master/.vsconfig). If VS 2022 is already installed, the script detects your edition (Community, Professional, or Enterprise) and uses the matching configuration. If no VS 2022 is found, it defaults to Community.
 
 You can also run a WinGet configuration directly for your edition:
 
 ```
+winget install --id Microsoft.WindowsADK --exact --silent --accept-package-agreements --accept-source-agreements --force --override "/quiet /norestart /features OptionId.DeploymentTools /ceip off"
 winget configure --enable
 winget configure -f .config/configuration.winget                   # Community (default)
 winget configure -f .config/configuration.vsProfessional.winget    # Professional
@@ -28,6 +29,8 @@ If you prefer to install prerequisites manually:
 
 - CMake >= 3.25
     - Can be installed with `winget install Kitware.CMake`
+- Windows ADK with the Deployment Tools feature
+    - Can be installed with `winget install --id Microsoft.WindowsADK --exact --silent --accept-package-agreements --accept-source-agreements --force --override "/quiet /norestart /features OptionId.DeploymentTools /ceip off"`
 - Visual Studio 2022 with the required components:
     - Use VS Installer → More → Import configuration and select [`.vsconfig`](https://github.com/microsoft/WSL/blob/master/.vsconfig)
     - Or: `winget install Microsoft.VisualStudio.2022.Community --override "--wait --quiet --config .vsconfig"`

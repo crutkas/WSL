@@ -13,8 +13,8 @@ Abstract:
 --*/
 
 #pragma once
-#include <string_view>
 #include "Distribution.h"
+#include "OptionalFeature.h"
 
 class WslInstall
 {
@@ -43,11 +43,20 @@ public:
         _In_ const std::optional<std::wstring>& location,
         _In_ const std::optional<uint64_t>& vhdSize);
 
-    static std::pair<bool, std::vector<std::wstring>> CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent);
+    struct OptionalComponentRequirements
+    {
+        bool RebootRequired{};
+        std::vector<std::wstring> ComponentsToEnable;
+    };
 
-    static void InstallOptionalComponents(const std::vector<std::wstring>& components);
+    static OptionalComponentRequirements CheckForMissingOptionalComponents(_In_ bool requireWslOptionalComponent);
 
-    static DWORD InstallOptionalComponent(LPCWSTR component, bool consoleOutput);
+    static OptionalComponentRequirements EvaluateOptionalComponentRequirements(
+        _In_ bool requireWslOptionalComponent,
+        _In_ wsl::windows::common::optionalfeature::State wslState,
+        _In_ wsl::windows::common::optionalfeature::State virtualMachinePlatformState);
+
+    static bool InstallOptionalComponents(const std::vector<std::wstring>& components, bool consoleOutput = true);
 
     static std::pair<std::wstring, GUID> InstallModernDistribution(
         const wsl::windows::common::distribution::ModernDistributionVersion& distribution,

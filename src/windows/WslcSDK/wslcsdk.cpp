@@ -1691,16 +1691,9 @@ try
             progressCallback(WSLC_COMPONENT_FLAG_VIRTUAL_MACHINE_PLATFORM, 0, 1, context);
         }
 
-        auto exitCode = WslInstall::InstallOptionalComponent(WslInstall::c_optionalFeatureNameVmp, false);
-        if (exitCode == ERROR_SUCCESS_REBOOT_REQUIRED)
+        if (WslInstall::InstallOptionalComponents({WslInstall::c_optionalFeatureNameVmp}, false))
         {
             result = HRESULT_FROM_WIN32(ERROR_SUCCESS_REBOOT_REQUIRED);
-        }
-        else if (exitCode != 0)
-        {
-            THROW_HR_WITH_USER_ERROR(
-                WSL_E_INSTALL_COMPONENT_FAILED,
-                wsl::shared::Localization::MessageOptionalComponentInstallFailed(WslInstall::c_optionalFeatureNameVmp, exitCode));
         }
 
         if (progressCallback)

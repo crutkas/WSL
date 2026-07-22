@@ -196,6 +196,7 @@ When adding settings to `src/shared/configfile/`:
 
 ### Windows Build Requirements
 - CMake >= 3.25 (`winget install Kitware.CMake`)
+- Windows ADK Deployment Tools (DISM API SDK)
 - Visual Studio with these components:
   - Windows SDK 26100
   - MSBuild

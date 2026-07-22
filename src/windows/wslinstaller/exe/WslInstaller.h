@@ -20,6 +20,7 @@ class DECLSPEC_UUID("B5AEB4C3-9541-492F-AD4D-505951F6ADA4") WslInstaller
     : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>, IWslInstaller, IFastRundown>
 {
     HRESULT Install(UINT* ExitCode, LPWSTR* Error) override;
+    HRESULT GetOptionalFeatureStates(WSL_OPTIONAL_FEATURE_STATE* WslState, WSL_OPTIONAL_FEATURE_STATE* VirtualMachinePlatformState) override;
 };
 
 struct InstallContext

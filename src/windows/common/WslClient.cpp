@@ -618,7 +618,7 @@ int Install(_In_ std::wstring_view commandLine)
 
 bool InstallPrerequisites(_In_ bool installWslOptionalComponent)
 {
-    const auto [rebootRequired, missingComponents] = WslInstall::CheckForMissingOptionalComponents(installWslOptionalComponent);
+    auto [rebootRequired, missingComponents] = WslInstall::CheckForMissingOptionalComponents(installWslOptionalComponent);
     if (missingComponents.empty())
     {
         return rebootRequired;
@@ -641,7 +641,7 @@ bool InstallPrerequisites(_In_ bool installWslOptionalComponent)
     }
     else
     {
-        WslInstall::InstallOptionalComponents(missingComponents);
+        rebootRequired |= WslInstall::InstallOptionalComponents(missingComponents);
     }
 
     return rebootRequired;
